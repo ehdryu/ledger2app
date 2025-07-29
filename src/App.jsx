@@ -565,14 +565,31 @@ function CardList({ user, cards, accounts, transactions, db }) {
             })}
              {isAdding && (
                 <form onSubmit={handleAddCard} className="p-4 border-t mt-4 space-y-3">
-                    <input value={newCard.name} onChange={e=>setNewCard({...newCard, name: e.target.value})} placeholder="카드 이름" className="w-full p-2 border rounded" required />
-                    <input type="number" min="1" max="31" value={newCard.paymentDay} onChange={e=>setNewCard({...newCard, paymentDay: e.target.value})} placeholder="결제일" className="w-full p-2 border rounded" required />
-                    <input type="number" min="1" max="31" value={newCard.usageStartDay} onChange={e=>setNewCard({...newCard, usageStartDay: e.target.value})} placeholder="이용 시작일" className="w-full p-2 border rounded" required />
-                    <input type="number" min="1" max="31" value={newCard.usageEndDay} onChange={e=>setNewCard({...newCard, usageEndDay: e.target.value})} placeholder="이용 종료일" className="w-full p-2 border rounded" required />
-                    <select value={newCard.linkedAccountId} onChange={e=>setNewCard({...newCard, linkedAccountId: e.target.value})} className="w-full p-2 border rounded" required>
-                        <option value="">출금 계좌 선택</option>
-                        {accounts.filter(a => a.currency === 'KRW').map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                    </select>
+                    <div>
+                        <label className="text-sm font-medium text-gray-700">카드 이름</label>
+                        <input value={newCard.name} onChange={e=>setNewCard({...newCard, name: e.target.value})} placeholder="카드 이름" className="w-full p-2 border rounded mt-1" required />
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                        <div>
+                            <label className="text-sm font-medium text-gray-700">결제일</label>
+                            <input type="number" min="1" max="31" value={newCard.paymentDay} onChange={e=>setNewCard({...newCard, paymentDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium text-gray-700">이용 시작일</label>
+                            <input type="number" min="1" max="31" value={newCard.usageStartDay} onChange={e=>setNewCard({...newCard, usageStartDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium text-gray-700">이용 종료일</label>
+                            <input type="number" min="1" max="31" value={newCard.usageEndDay} onChange={e=>setNewCard({...newCard, usageEndDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-gray-700">출금 계좌</label>
+                        <select value={newCard.linkedAccountId} onChange={e=>setNewCard({...newCard, linkedAccountId: e.target.value})} className="w-full p-2 border rounded mt-1" required>
+                            <option value="">출금 계좌 선택</option>
+                            {accounts.filter(a => a.currency === 'KRW').map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        </select>
+                    </div>
                     <div className="flex justify-end space-x-2"><button type="button" onClick={() => setIsAdding(false)} className="bg-gray-200 px-4 py-2 rounded">취소</button><button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">추가</button></div>
                 </form>
              )}
@@ -1074,5 +1091,4 @@ function DataIOView({ user, transactions, accounts, cards, schedules, currencies
                 </div>
             </div>
         </div>
-    );
-}
+    )
