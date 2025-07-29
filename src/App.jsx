@@ -1235,4 +1235,3 @@ function DataIOView({ user, transactions, accounts, cards, schedules, currencies
         </div>
     );
 }
-�
