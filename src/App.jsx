@@ -25,7 +25,7 @@ const auth = getAuth(app);
 
 // --- 헬퍼 함수 및 상수 ---
 const ICONS = {
-    "은행": "🏦", "증권": "💹", "코인": "🪙", "현금": "💵", "카드": "💳", "기타": "📁",
+    "은행": "🏦", "증권": "💹", "코인": "🪙", "현금": "💵", "카드": "💳", "기타": "�",
     "수입": "💰", "지출": "💸", "이체": "🔄", "대시보드": "📊", "거래내역": "🧾", "계좌관리": "💼",
     "리포트": "📈", "데이터": "💾", "스케줄": "📅", "환율": "💱"
 };
@@ -430,80 +430,152 @@ function ManagementView({ user, accounts, cards, transactions, onAddTransaction,
                 <button onClick={() => setView('accounts')} className={`px-4 py-2 ${view === 'accounts' ? 'border-b-2 border-indigo-500 font-semibold' : 'text-gray-500'}`}>계좌</button>
                 <button onClick={() => setView('cards')} className={`px-4 py-2 ${view === 'cards' ? 'border-b-2 border-indigo-500 font-semibold' : 'text-gray-500'}`}>신용카드</button>
             </div>
-            {view === 'accounts' && <AccountList user={user} accounts={accounts} currencies={currencies} rates={rates} />}
+            {view === 'accounts' && <AccountList user={user} accounts={accounts} currencies={currencies} rates={rates} db={db} />}
             {view === 'cards' && <CardList user={user} cards={cards} accounts={accounts} transactions={transactions} db={db}/>}
         </div>
     );
 }
 
-function AccountList({ user, accounts, currencies, rates }) {
-    const [isAdding, setIsAdding] = useState(false);
-    const [newAccount, setNewAccount] = useState({ name: '', category: '은행', balance: '', currency: 'KRW' });
+function AccountList({ user, accounts, currencies, rates, db }) {
+    const [editingAccount, setEditingAccount] = useState(null);
 
-    const handleAddAccount = async (e) => {
-        e.preventDefault();
-        const docRef = collection(db, `users/${user.uid}/accounts`);
-        await addDoc(docRef, { ...newAccount, balance: Number(newAccount.balance), createdAt: Timestamp.now() });
-        setNewAccount({ name: '', category: '은행', balance: '', currency: 'KRW' });
-        setIsAdding(false);
+    const handleEditClick = (account) => {
+        setEditingAccount(account);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingAccount(null);
     };
 
     const handleDeleteAccount = async (id) => {
-        if(window.confirm("정말로 계좌를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
-             await deleteDoc(doc(db, `users/${user.uid}/accounts`, id));
+        if (window.confirm("정말로 계좌를 삭제하시겠습니까? 연결된 모든 거래 내역도 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다.")) {
+            // 여기에 관련 거래내역 삭제 로직 추가 필요
+            await deleteDoc(doc(db, `users/${user.uid}/accounts`, id));
         }
     }
 
     return (
         <div className="bg-white p-6 rounded-xl shadow-md">
-            {accounts.map(acc => (
-                <div key={acc.id} className="flex justify-between items-center p-3 mb-2 border rounded-lg">
-                    <div className="flex items-center"><span className="text-2xl mr-4">{ICONS[acc.category]}</span><div><p className="font-semibold">{acc.name}</p><p className="text-sm text-gray-500">{acc.category} ({acc.currency})</p></div></div>
-                    <div className="text-right flex items-center gap-4">
-                        <div>
-                            <p className="text-lg font-bold">{formatNumber(acc.balance)} {acc.currency}</p>
-                            {acc.currency !== 'KRW' && <p className="text-sm text-gray-500">{formatCurrency(acc.balance * (rates[acc.currency] || 1))}</p>}
+            {editingAccount ? (
+                <AccountForm
+                    user={user}
+                    accountToEdit={editingAccount}
+                    currencies={currencies}
+                    onFinish={handleCancelEdit}
+                    db={db}
+                />
+            ) : (
+                <>
+                    {accounts.map(acc => (
+                        <div key={acc.id} className="flex justify-between items-center p-3 mb-2 border rounded-lg">
+                            <div className="flex items-center">
+                                <span className="text-2xl mr-4">{ICONS[acc.category]}</span>
+                                <div>
+                                    <p className="font-semibold">{acc.name}</p>
+                                    <p className="text-sm text-gray-500">{acc.category} ({acc.currency})</p>
+                                </div>
+                            </div>
+                            <div className="text-right flex items-center gap-2">
+                                <div>
+                                    <p className="text-lg font-bold">{formatNumber(acc.balance)} {acc.currency}</p>
+                                    {acc.currency !== 'KRW' && <p className="text-sm text-gray-500">{formatCurrency(acc.balance * (rates[acc.currency] || 1))}</p>}
+                                </div>
+                                <button onClick={() => handleEditClick(acc)} className="p-2 hover:bg-gray-200 rounded-full">✏️</button>
+                                <button onClick={() => handleDeleteAccount(acc.id)} className="p-2 hover:bg-gray-200 rounded-full">🗑️</button>
+                            </div>
                         </div>
-                        <button onClick={() => handleDeleteAccount(acc.id)} className="text-red-500 hover:text-red-700 p-1">삭제</button>
-                    </div>
-                </div>
-            ))}
-            {isAdding && (
-                <form onSubmit={handleAddAccount} className="p-4 border-t mt-4 space-y-3">
-                    <input name="name" value={newAccount.name} onChange={e => setNewAccount({...newAccount, name: e.target.value})} placeholder="계좌 이름" required className="w-full p-2 border rounded"/>
-                    <div className="grid grid-cols-2 gap-4">
-                        <select name="category" value={newAccount.category} onChange={e => setNewAccount({...newAccount, category: e.target.value})} required className="w-full p-2 border rounded">
-                            <option value="은행">은행</option><option value="증권">증권</option><option value="코인">코인</option><option value="현금">현금</option><option value="기타">기타</option>
-                        </select>
-                        <select name="currency" value={newAccount.currency} onChange={e => setNewAccount({...newAccount, currency: e.target.value})} required className="w-full p-2 border rounded">
-                            {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol} ({c.name})</option>)}
-                        </select>
-                    </div>
-                    <input name="balance" type="number" step="any" value={newAccount.balance} onChange={e => setNewAccount({...newAccount, balance: e.target.value})} placeholder="초기 잔액" required className="w-full p-2 border rounded"/>
-                    <div className="flex justify-end space-x-2"><button type="button" onClick={() => setIsAdding(false)} className="bg-gray-200 px-4 py-2 rounded">취소</button><button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">추가</button></div>
-                </form>
+                    ))}
+                    <AccountForm user={user} currencies={currencies} db={db} />
+                </>
             )}
-            <button onClick={() => setIsAdding(!isAdding)} className="w-full mt-4 bg-gray-100 hover:bg-gray-200 p-3 rounded-lg">{isAdding ? '취소' : '+ 새 계좌 추가'}</button>
         </div>
     );
 }
 
-function CardList({ user, cards, accounts, transactions, db }) {
-    const [isAdding, setIsAdding] = useState(false);
-    const [newCard, setNewCard] = useState({ name: '', paymentDay: 15, usageStartDay: 1, usageEndDay: 31, linkedAccountId: '' });
-    
-    const handleAddCard = async (e) => {
-        e.preventDefault();
-        await addDoc(collection(db, `users/${user.uid}/cards`), {
-            ...newCard,
-            paymentDay: Number(newCard.paymentDay),
-            usageStartDay: Number(newCard.usageStartDay),
-            usageEndDay: Number(newCard.usageEndDay),
-        });
-        setIsAdding(false);
-        setNewCard({ name: '', paymentDay: 15, usageStartDay: 1, usageEndDay: 31, linkedAccountId: '' });
+function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
+    const isEditing = !!accountToEdit;
+    const [formData, setFormData] = useState({
+        name: isEditing ? accountToEdit.name : '',
+        category: isEditing ? accountToEdit.category : '은행',
+        balance: isEditing ? accountToEdit.balance : '',
+        currency: isEditing ? accountToEdit.currency : 'KRW',
+    });
+
+    useEffect(() => {
+        if(isEditing) {
+            setFormData({
+                name: accountToEdit.name,
+                category: accountToEdit.category,
+                balance: accountToEdit.balance,
+                currency: accountToEdit.currency,
+            })
+        }
+    }, [accountToEdit, isEditing]);
+
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
     };
 
+    const handleSaveAccount = async (e) => {
+        e.preventDefault();
+        const dataToSave = {
+            ...formData,
+            balance: Number(formData.balance),
+        };
+
+        if (isEditing) {
+            await setDoc(doc(db, `users/${user.uid}/accounts`, accountToEdit.id), dataToSave, { merge: true });
+            alert('계좌가 수정되었습니다.');
+            onFinish();
+        } else {
+            await addDoc(collection(db, `users/${user.uid}/accounts`), { ...dataToSave, createdAt: Timestamp.now() });
+            setFormData({ name: '', category: '은행', balance: '', currency: 'KRW' }); // Reset form
+        }
+    };
+
+    return (
+        <form onSubmit={handleSaveAccount} className={`p-4 mt-4 ${isEditing ? '' : 'border-t'}`}>
+            <h3 className="font-semibold mb-3">{isEditing ? '계좌 수정' : '새 계좌 추가'}</h3>
+             <div className="space-y-3">
+                <input name="name" value={formData.name} onChange={handleChange} placeholder="계좌 이름" required className="w-full p-2 border rounded"/>
+                <div className="grid grid-cols-2 gap-4">
+                    <select name="category" value={formData.category} onChange={handleChange} required className="w-full p-2 border rounded">
+                        <option value="은행">은행</option><option value="증권">증권</option><option value="코인">코인</option><option value="현금">현금</option><option value="기타">기타</option>
+                    </select>
+                    <select name="currency" value={formData.currency} onChange={handleChange} required className="w-full p-2 border rounded">
+                        {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol} ({c.name})</option>)}
+                    </select>
+                </div>
+                <input name="balance" type="number" step="any" value={formData.balance} onChange={handleChange} placeholder={isEditing ? '현재 잔액' : '초기 잔액'} required className="w-full p-2 border rounded"/>
+                <div className="flex justify-end space-x-2">
+                    {isEditing && <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded">취소</button>}
+                    <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">{isEditing ? '수정' : '추가'}</button>
+                </div>
+            </div>
+        </form>
+    );
+}
+
+
+function CardList({ user, cards, accounts, transactions, db }) {
+    const [editingCard, setEditingCard] = useState(null);
+
+    const handleEditClick = (card) => {
+        setEditingCard(card);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingCard(null);
+    };
+
+    const handleDeleteCard = async (id) => {
+        if (window.confirm("정말로 신용카드를 삭제하시겠습니까? 연결된 거래 내역은 유지됩니다.")) {
+            await deleteDoc(doc(db, `users/${user.uid}/cards`, id));
+        }
+    };
+    
     const handleConfirmPayment = async (cardId, amount, linkedAccountId, transactionsToPay) => {
         if (!window.confirm(`${formatCurrency(amount)}을 결제 처리하시겠습니까?`)) return;
 
@@ -535,66 +607,136 @@ function CardList({ user, cards, accounts, transactions, db }) {
     
     return (
         <div className="bg-white p-6 rounded-xl shadow-md">
-            {cards.map(card => {
-                const today = new Date();
-                const paymentDay = card.paymentDay;
-                let usageStart = new Date(today.getFullYear(), today.getMonth() - (today.getDate() < paymentDay ? 1 : 0), card.usageStartDay);
-                let usageEnd = new Date(today.getFullYear(), today.getMonth() + (today.getDate() < paymentDay ? 0 : 1), card.usageEndDay, 23, 59, 59);
-                
-                const transactionsToPay = transactions.filter(t => t.type === 'card-expense' && t.cardId === card.id && !t.isPaid && t.date.toDate() >= usageStart && t.date.toDate() <= usageEnd);
-                const amountToPay = transactionsToPay.reduce((sum, t) => sum + t.amount, 0);
+            {editingCard ? (
+                <CardForm
+                    user={user}
+                    cardToEdit={editingCard}
+                    accounts={accounts}
+                    onFinish={handleCancelEdit}
+                    db={db}
+                />
+            ) : (
+                <>
+                    {cards.map(card => {
+                        const today = new Date();
+                        const paymentDay = card.paymentDay;
+                        let usageStart = new Date(today.getFullYear(), today.getMonth() - (today.getDate() < paymentDay ? 1 : 0), card.usageStartDay);
+                        let usageEnd = new Date(today.getFullYear(), today.getMonth() + (today.getDate() < paymentDay ? 0 : 1), card.usageEndDay, 23, 59, 59);
+                        
+                        const transactionsToPay = transactions.filter(t => t.type === 'card-expense' && t.cardId === card.id && !t.isPaid && t.date.toDate() >= usageStart && t.date.toDate() <= usageEnd);
+                        const amountToPay = transactionsToPay.reduce((sum, t) => sum + t.amount, 0);
 
-                return (
-                    <div key={card.id} className="p-3 mb-2 border rounded-lg">
-                        <div className="flex justify-between items-center">
-                            <p className="font-semibold">{card.name}</p>
-                            <span className="text-sm">결제일: 매월 {card.paymentDay}일</span>
-                        </div>
-                        {amountToPay > 0 && (
-                            <div className="mt-2 p-3 bg-red-50 rounded-lg flex justify-between items-center">
-                                <div>
-                                    <p className="text-red-600 font-bold">결제 예정 금액: {formatCurrency(amountToPay)}</p>
-                                    <p className="text-xs text-gray-500">({usageStart.toLocaleDateString()} ~ {usageEnd.toLocaleDateString()})</p>
+                        return (
+                            <div key={card.id} className="p-3 mb-2 border rounded-lg">
+                                <div className="flex justify-between items-center">
+                                    <p className="font-semibold">{card.name}</p>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm">결제일: 매월 {card.paymentDay}일</span>
+                                        <button onClick={() => handleEditClick(card)} className="p-2 hover:bg-gray-200 rounded-full text-sm">✏️</button>
+                                        <button onClick={() => handleDeleteCard(card.id)} className="p-2 hover:bg-gray-200 rounded-full text-sm">🗑️</button>
+                                    </div>
                                 </div>
-                                <button onClick={() => handleConfirmPayment(card.id, amountToPay, card.linkedAccountId, transactionsToPay)}
-                                 className="bg-red-500 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-600" disabled={!card.linkedAccountId}>결제 확정</button>
+                                {amountToPay > 0 && (
+                                    <div className="mt-2 p-3 bg-red-50 rounded-lg flex justify-between items-center">
+                                        <div>
+                                            <p className="text-red-600 font-bold">결제 예정 금액: {formatCurrency(amountToPay)}</p>
+                                            <p className="text-xs text-gray-500">({usageStart.toLocaleDateString()} ~ {usageEnd.toLocaleDateString()})</p>
+                                        </div>
+                                        <button onClick={() => handleConfirmPayment(card.id, amountToPay, card.linkedAccountId, transactionsToPay)}
+                                        className="bg-red-500 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-600" disabled={!card.linkedAccountId}>결제 확정</button>
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
-                );
-            })}
-             {isAdding && (
-                <form onSubmit={handleAddCard} className="p-4 border-t mt-4 space-y-3">
-                    <div>
-                        <label className="text-sm font-medium text-gray-700">카드 이름</label>
-                        <input value={newCard.name} onChange={e=>setNewCard({...newCard, name: e.target.value})} placeholder="카드 이름" className="w-full p-2 border rounded mt-1" required />
-                    </div>
-                    <div className="grid grid-cols-3 gap-4">
-                        <div>
-                            <label className="text-sm font-medium text-gray-700">결제일</label>
-                            <input type="number" min="1" max="31" value={newCard.paymentDay} onChange={e=>setNewCard({...newCard, paymentDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
-                        </div>
-                        <div>
-                            <label className="text-sm font-medium text-gray-700">이용 시작일</label>
-                            <input type="number" min="1" max="31" value={newCard.usageStartDay} onChange={e=>setNewCard({...newCard, usageStartDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
-                        </div>
-                        <div>
-                            <label className="text-sm font-medium text-gray-700">이용 종료일</label>
-                            <input type="number" min="1" max="31" value={newCard.usageEndDay} onChange={e=>setNewCard({...newCard, usageEndDay: e.target.value})} className="w-full p-2 border rounded mt-1" required />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="text-sm font-medium text-gray-700">출금 계좌</label>
-                        <select value={newCard.linkedAccountId} onChange={e=>setNewCard({...newCard, linkedAccountId: e.target.value})} className="w-full p-2 border rounded mt-1" required>
-                            <option value="">출금 계좌 선택</option>
-                            {accounts.filter(a => a.currency === 'KRW').map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                        </select>
-                    </div>
-                    <div className="flex justify-end space-x-2"><button type="button" onClick={() => setIsAdding(false)} className="bg-gray-200 px-4 py-2 rounded">취소</button><button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">추가</button></div>
-                </form>
-             )}
-             <button onClick={() => setIsAdding(!isAdding)} className="w-full mt-4 bg-gray-100 hover:bg-gray-200 p-3 rounded-lg">{isAdding ? '취소' : '+ 새 카드 추가'}</button>
+                        );
+                    })}
+                    <CardForm user={user} accounts={accounts} db={db} />
+                </>
+            )}
         </div>
+    );
+}
+
+function CardForm({ user, cardToEdit, accounts, onFinish, db }) {
+    const isEditing = !!cardToEdit;
+    const [formData, setFormData] = useState({
+        name: isEditing ? cardToEdit.name : '',
+        paymentDay: isEditing ? cardToEdit.paymentDay : 15,
+        usageStartDay: isEditing ? cardToEdit.usageStartDay : 1,
+        usageEndDay: isEditing ? cardToEdit.usageEndDay : 31,
+        linkedAccountId: isEditing ? cardToEdit.linkedAccountId : '',
+    });
+
+     useEffect(() => {
+        if(isEditing) {
+            setFormData({
+                name: cardToEdit.name,
+                paymentDay: cardToEdit.paymentDay,
+                usageStartDay: cardToEdit.usageStartDay,
+                usageEndDay: cardToEdit.usageEndDay,
+                linkedAccountId: cardToEdit.linkedAccountId,
+            })
+        }
+    }, [cardToEdit, isEditing]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSaveCard = async (e) => {
+        e.preventDefault();
+        const dataToSave = {
+            ...formData,
+            paymentDay: Number(formData.paymentDay),
+            usageStartDay: Number(formData.usageStartDay),
+            usageEndDay: Number(formData.usageEndDay),
+        };
+
+        if (isEditing) {
+            await setDoc(doc(db, `users/${user.uid}/cards`, cardToEdit.id), dataToSave, { merge: true });
+            alert('카드가 수정되었습니다.');
+            onFinish();
+        } else {
+            await addDoc(collection(db, `users/${user.uid}/cards`), dataToSave);
+            setFormData({ name: '', paymentDay: 15, usageStartDay: 1, usageEndDay: 31, linkedAccountId: '' });
+        }
+    };
+    
+    return (
+        <form onSubmit={handleSaveCard} className={`p-4 mt-4 ${isEditing ? '' : 'border-t'}`}>
+            <h3 className="font-semibold mb-3">{isEditing ? '신용카드 수정' : '새 신용카드 추가'}</h3>
+            <div className="space-y-3">
+                <div>
+                    <label className="text-sm font-medium text-gray-700">카드 이름</label>
+                    <input name="name" value={formData.name} onChange={handleChange} className="w-full p-2 border rounded mt-1" required />
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                    <div>
+                        <label className="text-sm font-medium text-gray-700">결제일</label>
+                        <input name="paymentDay" type="number" min="1" max="31" value={formData.paymentDay} onChange={handleChange} className="w-full p-2 border rounded mt-1" required />
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-gray-700">이용 시작일</label>
+                        <input name="usageStartDay" type="number" min="1" max="31" value={formData.usageStartDay} onChange={handleChange} className="w-full p-2 border rounded mt-1" required />
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-gray-700">이용 종료일</label>
+                        <input name="usageEndDay" type="number" min="1" max="31" value={formData.usageEndDay} onChange={handleChange} className="w-full p-2 border rounded mt-1" required />
+                    </div>
+                </div>
+                <div>
+                    <label className="text-sm font-medium text-gray-700">출금 계좌</label>
+                    <select name="linkedAccountId" value={formData.linkedAccountId} onChange={handleChange} className="w-full p-2 border rounded mt-1" required>
+                        <option value="">출금 계좌 선택</option>
+                        {accounts.filter(a => a.currency === 'KRW').map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                    </select>
+                </div>
+                <div className="flex justify-end space-x-2">
+                    {isEditing && <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded">취소</button>}
+                    <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">{isEditing ? '수정' : '추가'}</button>
+                </div>
+            </div>
+        </form>
     );
 }
 
@@ -1093,3 +1235,4 @@ function DataIOView({ user, transactions, accounts, cards, schedules, currencies
         </div>
     );
 }
+�
