@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, addDoc, getDocs, writeBatch, query, onSnapshot, setDoc, deleteDoc, Timestamp, runTransaction } from 'firebase/firestore';
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously, linkWithCredential } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously, linkWithCredential, browserLocalPersistence, setPersistence } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Papa from 'papaparse';
 
@@ -22,7 +22,6 @@ if (!firebaseConfig.projectId) {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-auth.useDeviceLanguage(); // 이 줄을 추가하여 사용자의 브라우저 언어로 인증 UI를 표시합니다.
 
 // --- 헬퍼 함수 및 상수 ---
 const ICONS = {
@@ -165,10 +164,11 @@ export default function HouseholdApp() {
     const handleGoogleSignIn = async () => {
         const provider = new GoogleAuthProvider();
         try {
+            await setPersistence(auth, browserLocalPersistence); // 로그인 상태 유지 설정
             await signInWithPopup(auth, provider);
         } catch (error) {
             console.error("Google 로그인 실패:", error);
-            alert("로그인에 실패했습니다. 다시 시도해주세요.");
+            alert("로그인에 실패했습니다. 팝업이 차단되었는지 확인해주세요.");
         }
     };
 
