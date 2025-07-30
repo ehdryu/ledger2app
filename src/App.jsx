@@ -22,6 +22,7 @@ if (!firebaseConfig.projectId) {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+auth.useDeviceLanguage(); // 이 줄을 추가하여 사용자의 브라우저 언어로 인증 UI를 표시합니다.
 
 // --- 헬퍼 함수 및 상수 ---
 const ICONS = {
