@@ -25,7 +25,7 @@ const auth = getAuth(app);
 
 // --- 헬퍼 함수 및 상수 ---
 const ICONS = {
-    "은행": "🏦", "증권": "💹", "코인": "🪙", "현금": "💵", "카드": "💳", "기타": "📁",
+    "은행": "🏦", "증권": "💹", "코인": "🪙", "현금": "💵", "카드": "💳", "기타": "�",
     "수입": "💰", "지출": "💸", "이체": "🔄", "대시보드": "📊", "거래내역": "🧾", "계좌관리": "💼",
     "리포트": "📈", "데이터": "💾", "스케줄": "📅", "환율": "💱"
 };
@@ -661,7 +661,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
                         {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol} ({c.name})</option>)}
                     </select>
                 </div>
-                <input name="initialBalance" type="number" step="any" value={formData.initialBalance} onChange={handleChange} placeholder="초기 잔액" required className="w-full p-2 border rounded"/>
+                <input name="initialBalance" type="number" step="any" value={formData.initialBalance} onChange={handleChange} placeholder={isEditing ? '현재 잔액' : '초기 잔액'} required className="w-full p-2 border rounded"/>
                 <div className="flex justify-end space-x-2">
                     {isEditing && <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded">취소</button>}
                     <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">{isEditing ? '수정' : '추가'}</button>
@@ -993,22 +993,333 @@ function ScheduleView({ user, schedules, accounts, upcomingPayments, accountsByI
     );
 }
 function ScheduleForm({ user, accounts, onFinish, scheduleToEdit, db }) {
-    // ... (이전 코드와 동일)
+    const isEditing = !!scheduleToEdit;
+    const [formData, setFormData] = useState({
+        description: isEditing ? scheduleToEdit.description : '',
+        amount: isEditing ? scheduleToEdit.amount : '',
+        date: isEditing ? new Date(scheduleToEdit.date.toDate()).toISOString().slice(0, 16) : '',
+        accountId: isEditing ? scheduleToEdit.accountId : '',
+    });
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({...prev, [name]: value}));
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const dataToSave = {
+            ...formData,
+            amount: Number(formData.amount),
+            date: Timestamp.fromDate(new Date(formData.date)),
+        };
+
+        try {
+            if (isEditing) {
+                const scheduleRef = doc(db, `users/${user.uid}/schedules`, scheduleToEdit.id);
+                await setDoc(scheduleRef, dataToSave, { merge: true });
+                alert("수정되었습니다.");
+            } else {
+                await addDoc(collection(db, `users/${user.uid}/schedules`), {
+                    ...dataToSave,
+                    isCompleted: false,
+                    createdAt: Timestamp.now(),
+                });
+                alert("등록되었습니다.");
+            }
+            onFinish();
+        } catch (error) {
+            console.error("스케줄 저장 실패:", error);
+            alert(`저장 실패: ${error.message}`);
+        }
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-lg max-w-lg mx-auto w-full">
+            <h2 className="text-2xl font-bold mb-4">{isEditing ? '예정 수입 수정' : '예정 수입 등록'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <input name="date" type="datetime-local" value={formData.date} onChange={handleChange} className="w-full p-2 border rounded" required />
+                <input name="description" value={formData.description} onChange={handleChange} placeholder="내용 (예: 이벤트 당첨금)" className="w-full p-2 border rounded" required />
+                <input name="amount" type="number" step="any" value={formData.amount} onChange={handleChange} placeholder="금액" className="w-full p-2 border rounded" required />
+                <select name="accountId" value={formData.accountId} onChange={handleChange} className="w-full p-2 border rounded" required>
+                    <option value="">입금될 계좌</option>
+                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                </select>
+                <div className="flex justify-end space-x-2 pt-4">
+                    <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
+                    <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded-lg">저장</button>
+                </div>
+            </form>
+        </div>
+    );
 }
 
 
 function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, db, currencies, rates, categories }) {
-    // ... (이전 코드와 동일)
+    const isEditing = !!transactionToEdit;
+    
+    const [type, setType] = useState(isEditing ? transactionToEdit.type : 'expense');
+    const [formData, setFormData] = useState({
+        date: isEditing ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0,16) : new Date().toISOString().slice(0, 16),
+        description: isEditing ? transactionToEdit.description : '',
+        inputAmount: isEditing ? transactionToEdit.originalAmount ?? transactionToEdit.amount : '',
+        category: isEditing ? transactionToEdit.category || '' : '',
+        memo: isEditing ? transactionToEdit.memo || '' : '',
+        accountId: isEditing ? transactionToEdit.accountId : '',
+        cardId: isEditing ? transactionToEdit.cardId : '',
+        fromAccountId: isEditing && transactionToEdit.type === 'transfer' ? transactionToEdit.accountId : '',
+        toAccountId: isEditing ? transactionToEdit.toAccountId : '',
+    });
+    const [inputCurrency, setInputCurrency] = useState('KRW');
+
+    useEffect(() => {
+        if (isEditing) {
+            setInputCurrency(transactionToEdit.originalCurrency || accounts.find(a => a.id === transactionToEdit.accountId)?.currency || 'KRW');
+        } else {
+            const accountId = type === 'transfer' ? formData.fromAccountId : formData.accountId;
+            const account = accounts.find(a => a.id === accountId);
+            if (account) {
+                setInputCurrency(account.currency);
+            }
+        }
+    }, [formData.accountId, formData.fromAccountId, type, accounts, isEditing, transactionToEdit]);
+
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const convertedAmount = useMemo(() => {
+        const accountId = type === 'transfer' ? formData.fromAccountId : formData.accountId;
+        const account = accounts.find(a => a.id === accountId);
+        if (!account || !formData.inputAmount || !rates[inputCurrency] || !rates[account.currency]) {
+            return null;
+        }
+        if (inputCurrency === account.currency) return null;
+
+        const amountInKRW = formData.inputAmount * rates[inputCurrency];
+        return amountInKRW / rates[account.currency];
+
+    }, [formData.inputAmount, inputCurrency, formData.accountId, formData.fromAccountId, type, accounts, rates]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        
+        try {
+            const dataForSubmit = {
+                description: formData.description,
+                originalAmount: Number(formData.inputAmount),
+                originalCurrency: inputCurrency,
+                memo: formData.memo,
+                date: Timestamp.fromDate(new Date(formData.date)),
+                category: formData.category || '',
+                type,
+                accountId: type === 'transfer' ? formData.fromAccountId : formData.accountId,
+                toAccountId: type === 'transfer' ? formData.toAccountId : null,
+                cardId: type === 'card-expense' ? formData.cardId : null,
+                isPaid: type === 'card-expense' ? (isEditing ? transactionToEdit.isPaid : false) : null,
+            };
+
+            if (isEditing) {
+                const transRef = doc(db, `users/${user.uid}/transactions`, transactionToEdit.id);
+                await setDoc(transRef, dataForSubmit, { merge: true });
+                alert('수정이 완료되었습니다.');
+            } else {
+                const newTransactionRef = doc(collection(db, `users/${user.uid}/transactions`));
+                await setDoc(newTransactionRef, dataForSubmit);
+                alert('추가가 완료되었습니다.');
+            }
+            onFinish();
+        } catch (error) {
+            console.error("거래 처리 실패:", error);
+            alert(`거래 처리 실패: ${error.message}`);
+        }
+    };
+    
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-lg max-w-lg mx-auto w-full">
+            <h2 className="text-2xl font-bold mb-4">{isEditing ? '거래 수정' : '거래 추가'}</h2>
+            <div className="flex mb-4 border-b">
+                 {[{id: 'expense', name: '지출(계좌)'}, {id:'income', name: '수입'}, {id:'card-expense', name:'지출(카드)'}, {id:'transfer', name:'이체'}].map(t => (
+                    <button key={t.id} onClick={() => setType(t.id)} disabled={isEditing}
+                        className={`px-4 py-2 text-sm md:text-base ${type === t.id ? 'border-b-2 border-indigo-500 font-semibold text-indigo-600' : 'text-gray-500'} ${isEditing ? 'cursor-not-allowed opacity-50' : ''}`}>
+                        {t.name}
+                    </button>
+                ))}
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                 <input name="date" type="datetime-local" value={formData.date} onChange={handleChange} required className="w-full p-2 border rounded-md"/>
+                 <input name="description" placeholder="내용" value={formData.description} onChange={handleChange} required className="w-full p-2 border rounded-md"/>
+                 <div className="flex gap-2">
+                    <input name="inputAmount" type="number" step="any" placeholder="금액" value={formData.inputAmount} onChange={handleChange} required className="w-2/3 p-2 border rounded-md"/>
+                    <select value={inputCurrency} onChange={e => setInputCurrency(e.target.value)} className="w-1/3 p-2 border rounded-md" disabled={type==='card-expense'}>
+                        {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol}</option>)}
+                    </select>
+                 </div>
+                 {convertedAmount && <p className="text-sm text-gray-500 text-center">≈ {formatNumber(convertedAmount)} {accounts.find(a=>a.id === (type === 'transfer' ? formData.fromAccountId : formData.accountId))?.currency}</p>}
+                 
+                {(type === 'expense' || type === 'income') && (
+                    <>
+                        <select name="accountId" required className="w-full p-2 border rounded-md" value={formData.accountId} onChange={handleChange}>
+                           <option value="">{type === 'expense' ? '출금' : '입금'} 계좌 선택</option>
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        </select>
+                        <select name="category" value={formData.category} onChange={handleChange} className="w-full p-2 border rounded-md">
+                            <option value="">카테고리 선택</option>
+                            {categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
+                        </select>
+                    </>
+                )}
+                 {type === 'card-expense' && (
+                    <>
+                        <select name="cardId" required className="w-full p-2 border rounded-md" value={formData.cardId} onChange={handleChange}>
+                            <option value="">사용 카드 선택</option>
+                            {cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}
+                        </select>
+                         <select name="category" value={formData.category} onChange={handleChange} className="w-full p-2 border rounded-md">
+                            <option value="">카테고리 선택</option>
+                            {categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
+                        </select>
+                    </>
+                 )}
+                 {type === 'transfer' && (
+                    <>
+                       <select name="fromAccountId" required className="w-full p-2 border rounded-md" value={formData.fromAccountId} onChange={handleChange}>
+                            <option value="">보내는 계좌</option>
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        </select>
+                        <select name="toAccountId" required className="w-full p-2 border rounded-md" value={formData.toAccountId} onChange={handleChange}>
+                            <option value="">받는 계좌</option>
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        </select>
+                    </>
+                )}
+                <textarea name="memo" value={formData.memo} onChange={handleChange} placeholder="메모 (선택)" className="w-full p-2 border rounded-md" rows="2"></textarea>
+                <div className="flex justify-end space-x-2 pt-4">
+                    <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
+                    <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg">저장</button>
+                </div>
+            </form>
+        </div>
+    );
 }
 
 function ReportsView({ transactions, convertToKRW, accountsById }) {
-    // ... (이전 코드와 동일)
+    const expenseData = useMemo(() => {
+        const expenseByCategory = transactions
+            .filter(t => (t.type === 'expense' || t.type === 'card-expense') && t.category)
+            .reduce((acc, t) => {
+                const account = accountsById[t.accountId] || {};
+                const amountInKRW = t.type === 'card-expense' ? t.amount : convertToKRW(t.amount, account.currency);
+                acc[t.category] = (acc[t.category] || 0) + amountInKRW;
+                return acc;
+            }, {});
+        return Object.entries(expenseByCategory).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
+    }, [transactions, convertToKRW, accountsById]);
+    
+    return (
+        <div>
+            <h2 className="text-3xl font-bold mb-6">리포트</h2>
+            <div className="bg-white p-6 rounded-xl shadow-md">
+                <h3 className="text-xl font-semibold mb-4">카테고리별 지출 분석 (KRW 환산)</h3>
+                {expenseData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={400}>
+                    <PieChart>
+                        <Pie data={expenseData} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} outerRadius={150} fill="#8884d8" dataKey="value">
+                            {expenseData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(value) => formatCurrency(value)} />
+                        <Legend />
+                    </PieChart>
+                </ResponsiveContainer>
+                ) : <p className="text-gray-500">분석할 지출 내역이 없습니다.</p>}
+            </div>
+        </div>
+    );
 }
 
 function DataIOView({ user, transactions, accounts, cards, schedules, currencies, db }) {
-    // ... (이전 코드와 동일)
-}
+    const handleExport = () => {
+        const allData = {
+            accounts: accounts.map(({id, ...rest})=>rest),
+            cards: cards.map(({id, ...rest})=>rest),
+            transactions: transactions.map(({id, ...rest}) => ({...rest, date: rest.date.toDate().toISOString()})),
+            schedules: schedules.map(({id, ...rest}) => ({...rest, date: rest.date.toDate().toISOString()})),
+            currencies: currencies.map(({id, ...rest})=>rest),
+        }
+        const jsonStr = JSON.stringify(allData, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute("download", `household_data_${new Date().toISOString().split('T')[0]}.json`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
 
+    const handleImport = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (!window.confirm("데이터를 가져오시겠습니까? 기존의 모든 데이터는 삭제되고 이 파일의 데이터로 대체됩니다. 이 작업은 되돌릴 수 없습니다.")) return;
+
+                const batch = writeBatch(db);
+                const collections = ['accounts', 'cards', 'transactions', 'schedules', 'currencies'];
+                
+                // Delete existing data
+                for (const col of collections) {
+                    const snapshot = await getDocs(collection(db, `users/${user.uid}/${col}`));
+                    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+                }
+                
+                // Add new data
+                for (const col of collections) {
+                    if (data[col]) {
+                        data[col].forEach(item => {
+                            let newItem = {...item};
+                            if (item.date) newItem.date = Timestamp.fromDate(new Date(item.date));
+                            if (item.createdAt) newItem.createdAt = Timestamp.fromDate(new Date(item.createdAt));
+                            
+                            const docRef = col === 'currencies' ? doc(db, `users/${user.uid}/${col}`, item.symbol) : doc(collection(db, `users/${user.uid}/${col}`));
+                            batch.set(docRef, newItem);
+                        });
+                    }
+                }
+                
+                await batch.commit();
+                alert("가져오기 완료! 페이지를 새로고침합니다.");
+                window.location.reload();
+            } catch (error) {
+                alert(`가져오기 오류: ${error.message}`);
+                console.error("Import error:", error);
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    return (
+        <div>
+            <h2 className="text-3xl font-bold mb-6">데이터 관리</h2>
+            <div className="space-y-6">
+                <div className="bg-white p-6 rounded-xl shadow-md">
+                    <h3 className="text-xl font-semibold">데이터 내보내기 (JSON)</h3>
+                    <p className="text-gray-600 my-2">모든 데이터를 JSON 파일로 다운로드하여 백업합니다.</p>
+                    <button onClick={handleExport} className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition">내보내기</button>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-md">
+                    <h3 className="text-xl font-semibold">데이터 가져오기 (JSON)</h3>
+                    <p className="text-gray-600 my-2"><strong>경고:</strong> 이 작업은 현재 사용자의 모든 데이터를 삭제하고 파일의 데이터로 덮어씁니다.</p>
+                     <input type="file" accept=".json" onChange={handleImport} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"/>
+                </div>
+            </div>
+        </div>
+    );
+}
 function CategoryView({ user, categories, db }) {
     const [editingCategory, setEditingCategory] = useState(null);
 
@@ -1054,4 +1365,4 @@ function CategoryView({ user, categories, db }) {
         </div>
     );
 }
-
+�
