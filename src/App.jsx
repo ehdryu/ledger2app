@@ -77,7 +77,7 @@ export default function HouseholdApp() {
     const [showTransactionModal, setShowTransactionModal] = useState(false);
     const [showScheduleModal, setShowScheduleModal] = useState(false);
     const [isNavOpen, setIsNavOpen] = useState(false);
-    const [transactionFilter, setTransactionFilter] = useState({ type: 'all', account: 'all', year: 'all', month: 'all' });
+    const [transactionFilter, setTransactionFilter] = useState({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '' });
     
     const [accounts, setAccounts] = useState([]);
     const [cards, setCards] = useState([]);
@@ -230,7 +230,7 @@ export default function HouseholdApp() {
     const handleOpenAddScheduleModal = () => { setEditingSchedule(null); setShowScheduleModal(true); };
     const handleOpenEditScheduleModal = (schedule) => { setEditingSchedule(schedule); setShowScheduleModal(true); };
     const handleAccountClick = (accountId) => {
-        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all' }));
+        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '' }));
         setActiveView('transactions');
     };
 
@@ -406,7 +406,7 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
     );
 }
 
-function TransactionsView({ transactions, accountsById, cardsById, accounts, cards, onAddTransaction, onEditTransaction, onDeleteTransaction, filter, setFilter }) {
+function TransactionsView({ transactions, accountsById, cardsById, accounts, cards, onAddTransaction, onEditTransaction, onDeleteTransaction, filter, setFilter, categories }) {
     
     const transactionYears = useMemo(() => {
         if (transactions.length === 0) return ['all'];
@@ -419,7 +419,10 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
             const typeMatch = filter.type === 'all' || t.type === filter.type;
             const accountMatch = filter.account === 'all' || t.accountId === filter.account || t.cardId === filter.account || (t.type === 'transfer' && t.toAccountId === filter.account);
             let dateMatch = filter.year === 'all' ? true : date.getFullYear() === Number(filter.year) && (filter.month === 'all' ? true : (date.getMonth() + 1) === Number(filter.month));
-            return typeMatch && accountMatch && dateMatch;
+            const categoryMatch = filter.category === 'all' || t.category === filter.category;
+            const searchMatch = filter.search === '' || t.description.toLowerCase().includes(filter.search.toLowerCase()) || (t.memo && t.memo.toLowerCase().includes(filter.search.toLowerCase()));
+
+            return typeMatch && accountMatch && dateMatch && categoryMatch && searchMatch;
         });
     }, [transactions, filter]);
 
@@ -430,6 +433,7 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
                  <button onClick={onAddTransaction} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
             </div>
             <div className="flex flex-wrap gap-4 mb-4 bg-white p-4 rounded-xl shadow-sm">
+                <input type="text" placeholder="내용/메모 검색..." value={filter.search} onChange={e => setFilter({...filter, search: e.target.value})} className="p-2 border rounded-lg bg-white flex-grow"/>
                 <select value={filter.type} onChange={e => setFilter({...filter, type: e.target.value})} className="p-2 border rounded-lg bg-white">
                     <option value="all">모든 종류</option><option value="income">수입</option><option value="expense">지출(계좌)</option><option value="card-expense">지출(카드)</option><option value="payment">카드대금</option><option value="transfer">이체</option>
                 </select>
@@ -437,6 +441,10 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
                     <option value="all">모든 계좌/카드</option>
                     {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
                     {cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}
+                </select>
+                <select value={filter.category} onChange={e => setFilter({...filter, category: e.target.value})} className="p-2 border rounded-lg bg-white">
+                    <option value="all">모든 카테고리</option>
+                    {categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
                 </select>
                 <select value={filter.year} onChange={e => setFilter({...filter, year: e.target.value, month: 'all'})} className="p-2 border rounded-lg bg-white">
                     {transactionYears.map(y => <option key={y} value={y}>{y === 'all' ? '전체 연도' : `${y}년`}</option>)}
