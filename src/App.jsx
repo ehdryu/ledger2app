@@ -1365,4 +1365,3 @@ function CategoryView({ user, categories, db }) {
         </div>
     );
 }
-�
