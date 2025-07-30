@@ -84,6 +84,8 @@ export default function HouseholdApp() {
     const [transactions, setTransactions] = useState([]);
     const [schedules, setSchedules] = useState([]);
     const [currencies, setCurrencies] = useState([]);
+    const [categories, setCategories] = useState([]);
+    const [memos, setMemos] = useState([]);
 
     // --- Firebase 인증 ---
     useEffect(() => {
@@ -102,7 +104,7 @@ export default function HouseholdApp() {
     useEffect(() => {
         if (!user || user.isAnonymous) return;
 
-        const collectionsToWatch = ['accounts', 'cards', 'transactions', 'schedules', 'currencies'];
+        const collectionsToWatch = ['accounts', 'cards', 'transactions', 'schedules', 'currencies', 'categories', 'memos'];
         const unsubscribes = collectionsToWatch.map(colName => {
             const q = query(collection(db, `users/${user.uid}/${colName}`));
             return onSnapshot(q, (querySnapshot) => {
@@ -118,6 +120,8 @@ export default function HouseholdApp() {
                         }
                         setCurrencies(data);
                         break;
+                    case 'categories': setCategories(data.sort((a,b) => a.name.localeCompare(b.name))); break;
+                    case 'memos': setMemos(data.sort((a,b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime())); break;
                     default: break;
                 }
             }, (error) => console.error(`${colName} 데이터 로딩 실패:`, error));
@@ -249,7 +253,7 @@ export default function HouseholdApp() {
 
     // --- 뷰 렌더링 ---
     const renderView = () => {
-        const props = { user, accounts: accountsWithCalculatedBalances, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW,
+        const props = { user, accounts: accountsWithCalculatedBalances, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW, categories, memos,
             onAddTransaction: handleOpenAddTransactionModal,
             onEditTransaction: handleOpenEditTransactionModal,
             onDeleteTransaction: handleDeleteTransaction,
@@ -320,7 +324,7 @@ export default function HouseholdApp() {
             </div>
             {showTransactionModal && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
-                    <TransactionForm user={user} accounts={accounts} cards={cards} onFinish={() => setShowTransactionModal(false)} transactionToEdit={editingTransaction} db={db} currencies={currencies} rates={rates}/>
+                    <TransactionForm user={user} accounts={accounts} cards={cards} onFinish={() => setShowTransactionModal(false)} transactionToEdit={editingTransaction} db={db} currencies={currencies} rates={rates} categories={categories}/>
                 </div>
             )}
             {showScheduleModal && (
@@ -481,7 +485,7 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
     );
 }
 
-function ManagementView({ user, accounts, cards, transactions, onAddTransaction, currencies, rates, onAccountClick, totalCashAssetInKRW, assetsByCurrency }) {
+function ManagementView({ user, accounts, cards, transactions, onAddTransaction, currencies, rates, onAccountClick, totalCashAssetInKRW, assetsByCurrency, categories }) {
     const [view, setView] = useState('accounts');
     return (
         <div>
@@ -510,9 +514,11 @@ function ManagementView({ user, accounts, cards, transactions, onAddTransaction,
             <div className="flex border-b mb-4">
                 <button onClick={() => setView('accounts')} className={`px-4 py-2 ${view === 'accounts' ? 'border-b-2 border-indigo-500 font-semibold' : 'text-gray-500'}`}>계좌</button>
                 <button onClick={() => setView('cards')} className={`px-4 py-2 ${view === 'cards' ? 'border-b-2 border-indigo-500 font-semibold' : 'text-gray-500'}`}>신용카드</button>
+                <button onClick={() => setView('categories')} className={`px-4 py-2 ${view === 'categories' ? 'border-b-2 border-indigo-500 font-semibold' : 'text-gray-500'}`}>카테고리</button>
             </div>
             {view === 'accounts' && <AccountList user={user} accounts={accounts} currencies={currencies} rates={rates} db={db} onAccountClick={onAccountClick} />}
             {view === 'cards' && <CardList user={user} cards={cards} accounts={accounts} transactions={transactions} db={db}/>}
+            {view === 'categories' && <CategoryView user={user} categories={categories} db={db} />}
         </div>
     );
 }
