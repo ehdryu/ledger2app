@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, addDoc, getDocs, writeBatch, query, onSnapshot, setDoc, deleteDoc, Timestamp, runTransaction } from 'firebase/firestore';
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously, linkWithCredential, browserLocalPersistence, setPersistence } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, browserLocalPersistence, setPersistence } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Papa from 'papaparse';
 
@@ -136,15 +136,44 @@ export default function HouseholdApp() {
         return amount * (rates[currency] || 1);
     }, [rates]);
 
-    const { totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, assetsByCurrency } = useMemo(() => {
-        const totalCash = accounts.reduce((sum, acc) => sum + convertToKRW(acc.balance || 0, acc.currency), 0);
-        
-        const currencySummary = accounts.reduce((summary, account) => {
-            const { currency, balance } = account;
-            if (!summary[currency]) {
-                summary[currency] = 0;
+    const accountsWithCalculatedBalances = useMemo(() => {
+        return accounts.map(account => {
+            const balances = {};
+            
+            if (account.initialBalance) {
+                balances[account.currency] = account.initialBalance;
             }
-            summary[currency] += balance;
+
+            transactions.forEach(t => {
+                const currency = t.originalCurrency || accountsById[t.accountId]?.currency || 'KRW';
+                const amount = t.originalAmount ?? t.amount;
+
+                if (t.accountId === account.id) {
+                    if (t.type === 'income') balances[currency] = (balances[currency] || 0) + amount;
+                    if (t.type === 'expense') balances[currency] = (balances[currency] || 0) - amount;
+                }
+                if (t.type === 'transfer') {
+                    if (t.accountId === account.id) balances[currency] = (balances[currency] || 0) - amount;
+                    if (t.toAccountId === account.id) balances[currency] = (balances[currency] || 0) + amount;
+                }
+            });
+            
+            let totalKRW = 0;
+            Object.entries(balances).forEach(([currency, amount]) => {
+                totalKRW += convertToKRW(amount, currency);
+            });
+
+            return { ...account, balances, totalKRW };
+        });
+    }, [accounts, transactions, rates, convertToKRW, accountsById]);
+
+    const { totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, assetsByCurrency } = useMemo(() => {
+        const totalCash = accountsWithCalculatedBalances.reduce((sum, acc) => sum + acc.totalKRW, 0);
+        
+        const currencySummary = accountsWithCalculatedBalances.reduce((summary, account) => {
+            Object.entries(account.balances).forEach(([currency, amount]) => {
+                summary[currency] = (summary[currency] || 0) + amount;
+            });
             return summary;
         }, {});
 
@@ -169,7 +198,7 @@ export default function HouseholdApp() {
             upcomingPayments: cardPayments.filter(p => p.amount > 0),
             assetsByCurrency: currencySummary,
         };
-    }, [accounts, cards, transactions, convertToKRW]);
+    }, [accountsWithCalculatedBalances, cards, transactions]);
 
     // --- 로그인 및 로그아웃 핸들러 ---
     const handleGoogleSignIn = async () => {
@@ -203,38 +232,9 @@ export default function HouseholdApp() {
 
     // --- 데이터 CRUD 함수 ---
     const handleDeleteTransaction = async (transactionToDelete) => {
-        if (!window.confirm(`'${transactionToDelete.description}' 거래를 삭제하시겠습니까? 계좌 잔액이 복구됩니다.`)) return;
+        if (!window.confirm(`'${transactionToDelete.description}' 거래를 삭제하시겠습니까?`)) return;
         try {
-            await runTransaction(db, async (transaction) => {
-                const { type, amount, accountId, toAccountId, paidCardTransactionIds } = transactionToDelete;
-
-                if (type === 'income') {
-                    const accRef = doc(db, `users/${user.uid}/accounts`, accountId);
-                    const accDoc = await transaction.get(accRef);
-                    if (accDoc.exists()) transaction.update(accRef, { balance: accDoc.data().balance - amount });
-                } else if (type === 'expense') {
-                    const accRef = doc(db, `users/${user.uid}/accounts`, accountId);
-                    const accDoc = await transaction.get(accRef);
-                    if (accDoc.exists()) transaction.update(accRef, { balance: accDoc.data().balance + amount });
-                } else if (type === 'transfer') {
-                    const fromAccRef = doc(db, `users/${user.uid}/accounts`, accountId);
-                    const toAccRef = doc(db, `users/${user.uid}/accounts`, toAccountId);
-                    const fromAccDoc = await transaction.get(fromAccRef);
-                    const toAccDoc = await transaction.get(toAccRef);
-                    if (fromAccDoc.exists()) transaction.update(fromAccRef, { balance: fromAccDoc.data().balance + amount });
-                    if (toAccDoc.exists()) transaction.update(toAccRef, { balance: toAccDoc.data().balance - amount });
-                } else if (type === 'payment') {
-                    for (const id of paidCardTransactionIds || []) {
-                        const cardTransRef = doc(db, `users/${user.uid}/transactions`, id);
-                        transaction.update(cardTransRef, { isPaid: false });
-                    }
-                    const accRef = doc(db, `users/${user.uid}/accounts`, accountId);
-                    const accDoc = await transaction.get(accRef);
-                    if (accDoc.exists()) transaction.update(accRef, { balance: accDoc.data().balance + amount });
-                }
-                const transRef = doc(db, `users/${user.uid}/transactions`, transactionToDelete.id);
-                transaction.delete(transRef);
-            });
+            await deleteDoc(doc(db, `users/${user.uid}/transactions`, transactionToDelete.id));
             alert('삭제가 완료되었습니다.');
         } catch (error) { console.error("거래 삭제 실패:", error); alert(`삭제 실패: ${error.message}`); }
     };
@@ -249,7 +249,7 @@ export default function HouseholdApp() {
 
     // --- 뷰 렌더링 ---
     const renderView = () => {
-        const props = { user, accounts, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW,
+        const props = { user, accounts: accountsWithCalculatedBalances, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW,
             onAddTransaction: handleOpenAddTransactionModal,
             onEditTransaction: handleOpenEditTransactionModal,
             onDeleteTransaction: handleDeleteTransaction,
@@ -533,12 +533,12 @@ function AccountList({ user, accounts, currencies, rates, db, onAccountClick }) 
         switch(sort) {
             case 'name-asc': return [...processedAccounts].sort((a, b) => a.name.localeCompare(b.name));
             case 'name-desc': return [...processedAccounts].sort((a, b) => b.name.localeCompare(a.name));
-            case 'balance-asc': return [...processedAccounts].sort((a, b) => (a.balance * (rates[a.currency] || 1)) - (b.balance * (rates[b.currency] || 1)));
-            case 'balance-desc': return [...processedAccounts].sort((a, b) => (b.balance * (rates[b.currency] || 1)) - (a.balance * (rates[a.currency] || 1)));
+            case 'balance-asc': return [...processedAccounts].sort((a, b) => a.totalKRW - b.totalKRW);
+            case 'balance-desc': return [...processedAccounts].sort((a, b) => b.totalKRW - a.totalKRW);
             case 'category': return [...processedAccounts].sort((a, b) => a.category.localeCompare(b.category));
             default: return processedAccounts;
         }
-    }, [accounts, filter, sort, rates]);
+    }, [accounts, filter, sort]);
 
     const handleEditClick = (e, account) => {
         e.stopPropagation(); // 부모 클릭 이벤트 방지
@@ -577,13 +577,15 @@ function AccountList({ user, accounts, currencies, rates, db, onAccountClick }) 
                                 <span className="text-2xl mr-4">{ICONS[acc.category]}</span>
                                 <div>
                                     <p className="font-semibold">{acc.name}</p>
-                                    <p className="text-sm text-gray-500">{acc.category} ({acc.currency})</p>
+                                    <p className="text-sm text-gray-500">{acc.category}</p>
                                 </div>
                             </div>
                             <div className="text-right flex items-center gap-2">
                                 <div>
-                                    <p className="text-lg font-bold">{formatNumber(acc.balance)} {acc.currency}</p>
-                                    {acc.currency !== 'KRW' && <p className="text-sm text-gray-500">{formatCurrency(acc.balance * (rates[acc.currency] || 1))}</p>}
+                                    {Object.entries(acc.balances).map(([currency, amount]) => (
+                                        <p key={currency} className="text-md font-semibold">{formatNumber(amount)} {currency}</p>
+                                    ))}
+                                    {Object.keys(acc.balances).length > 1 && <p className="text-sm text-gray-500 font-bold">총 {formatCurrency(acc.totalKRW)}</p>}
                                 </div>
                                 <button onClick={(e) => handleEditClick(e, acc)} className="p-2 hover:bg-gray-200 rounded-full">✏️</button>
                                 <button onClick={(e) => handleDeleteAccount(e, acc.id)} className="p-2 hover:bg-gray-200 rounded-full">🗑️</button>
@@ -602,7 +604,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
     const [formData, setFormData] = useState({
         name: isEditing ? accountToEdit.name : '',
         category: isEditing ? accountToEdit.category : '은행',
-        balance: isEditing ? accountToEdit.balance : '',
+        initialBalance: isEditing ? accountToEdit.initialBalance : '',
         currency: isEditing ? accountToEdit.currency : 'KRW',
     });
 
@@ -611,7 +613,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
             setFormData({
                 name: accountToEdit.name,
                 category: accountToEdit.category,
-                balance: accountToEdit.balance,
+                initialBalance: accountToEdit.initialBalance,
                 currency: accountToEdit.currency,
             })
         }
@@ -627,7 +629,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
         e.preventDefault();
         const dataToSave = {
             ...formData,
-            balance: Number(formData.balance),
+            initialBalance: Number(formData.initialBalance),
         };
 
         if (isEditing) {
@@ -636,7 +638,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
             onFinish();
         } else {
             await addDoc(collection(db, `users/${user.uid}/accounts`), { ...dataToSave, createdAt: Timestamp.now() });
-            setFormData({ name: '', category: '은행', balance: '', currency: 'KRW' }); // Reset form
+            setFormData({ name: '', category: '은행', initialBalance: '', currency: 'KRW' }); // Reset form
         }
     };
 
@@ -653,7 +655,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db }) {
                         {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol} ({c.name})</option>)}
                     </select>
                 </div>
-                <input name="balance" type="number" step="any" value={formData.balance} onChange={handleChange} placeholder={isEditing ? '현재 잔액' : '초기 잔액'} required className="w-full p-2 border rounded"/>
+                <input name="initialBalance" type="number" step="any" value={formData.initialBalance} onChange={handleChange} placeholder="초기 잔액" required className="w-full p-2 border rounded"/>
                 <div className="flex justify-end space-x-2">
                     {isEditing && <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded">취소</button>}
                     <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded">{isEditing ? '수정' : '추가'}</button>
@@ -913,16 +915,10 @@ function ScheduleView({ user, schedules, accounts, upcomingPayments, accountsByI
         if (!window.confirm(`'${schedule.description}'을 수입으로 처리하시겠습니까?`)) return;
         try {
             await runTransaction(db, async (transaction) => {
-                const accountRef = doc(db, `users/${user.uid}/accounts`, schedule.accountId);
-                const accountDoc = await transaction.get(accountRef);
-                if (!accountDoc.exists()) throw new Error("계좌를 찾을 수 없습니다.");
-
-                const newBalance = accountDoc.data().balance + schedule.amount;
-                transaction.update(accountRef, { balance: newBalance });
-                
                 const newTransactionRef = doc(collection(db, `users/${user.uid}/transactions`));
                 transaction.set(newTransactionRef, {
                     type: 'income', accountId: schedule.accountId, amount: schedule.amount,
+                    originalAmount: schedule.amount, originalCurrency: accountsById[schedule.accountId]?.currency,
                     description: `(예정) ${schedule.description}`, category: '예정된 수입',
                     date: Timestamp.now(), createdAt: Timestamp.now(),
                 });
@@ -1063,10 +1059,14 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
     const [inputCurrency, setInputCurrency] = useState('KRW');
 
     useEffect(() => {
-        const accountId = type === 'transfer' ? formData.fromAccountId : formData.accountId;
-        const account = accounts.find(a => a.id === accountId);
-        if (account) {
-            setInputCurrency(isEditing ? transactionToEdit.originalCurrency || account.currency : account.currency);
+        if (isEditing) {
+            setInputCurrency(transactionToEdit.originalCurrency || accounts.find(a => a.id === transactionToEdit.accountId)?.currency || 'KRW');
+        } else {
+            const accountId = type === 'transfer' ? formData.fromAccountId : formData.accountId;
+            const account = accounts.find(a => a.id === accountId);
+            if (account) {
+                setInputCurrency(account.currency);
+            }
         }
     }, [formData.accountId, formData.fromAccountId, type, accounts, isEditing, transactionToEdit]);
 
@@ -1093,55 +1093,28 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
         e.preventDefault();
         
         try {
-            await runTransaction(db, async (transaction) => {
-                const accountId = type === 'transfer' ? formData.fromAccountId : formData.accountId;
-                const finalAmount = convertedAmount ?? Number(formData.inputAmount);
+            const dataForSubmit = {
+                description: formData.description,
+                originalAmount: Number(formData.inputAmount),
+                originalCurrency: inputCurrency,
+                date: Timestamp.fromDate(new Date(formData.date)),
+                category: formData.category || '',
+                type,
+                accountId: type === 'transfer' ? formData.fromAccountId : formData.accountId,
+                toAccountId: type === 'transfer' ? formData.toAccountId : null,
+                cardId: type === 'card-expense' ? formData.cardId : null,
+                isPaid: type === 'card-expense' ? (isEditing ? transactionToEdit.isPaid : false) : null,
+            };
 
-                let dataForSubmit = {
-                    description: formData.description, amount: finalAmount,
-                    originalAmount: convertedAmount ? Number(formData.inputAmount) : null,
-                    originalCurrency: convertedAmount ? inputCurrency : null,
-                    date: Timestamp.fromDate(new Date(formData.date)), category: formData.category || '', type,
-                    accountId: accountId, toAccountId: type === 'transfer' ? formData.toAccountId : null,
-                    cardId: type === 'card-expense' ? formData.cardId : null,
-                    isPaid: type === 'card-expense' ? (isEditing ? transactionToEdit.isPaid : false) : null,
-                };
-
-                if (isEditing) {
-                    const oldTransaction = transactionToEdit;
-                    const transRef = doc(db, `users/${user.uid}/transactions`, oldTransaction.id);
-                    // ... (복잡한 수정 로직 생략)
-                    transaction.update(transRef, dataForSubmit);
-                    alert('수정이 완료되었습니다.');
-
-                } else {
-                    const newTransactionRef = doc(collection(db, `users/${user.uid}/transactions`));
-                    if (type === 'income' || type === 'expense') {
-                        const accountRef = doc(db, `users/${user.uid}/accounts`, accountId);
-                        const accountDoc = await transaction.get(accountRef);
-                        if (!accountDoc.exists()) throw new Error("계좌를 찾을 수 없습니다.");
-                        const newBalance = type === 'income' ? accountDoc.data().balance + finalAmount : accountDoc.data().balance - finalAmount;
-                        transaction.update(accountRef, { balance: newBalance });
-                        transaction.set(newTransactionRef, dataForSubmit);
-                    } else if (type === 'card-expense') {
-                        dataForSubmit.amount = Number(formData.inputAmount);
-                        dataForSubmit.originalAmount = null; dataForSubmit.originalCurrency = null;
-                        transaction.set(newTransactionRef, dataForSubmit);
-                    } else if (type === 'transfer') {
-                        if (formData.fromAccountId === formData.toAccountId) throw new Error("동일 계좌로 이체할 수 없습니다.");
-                        const fromAccRef = doc(db, `users/${user.uid}/accounts`, formData.fromAccountId);
-                        const toAccRef = doc(db, `users/${user.uid}/accounts`, formData.toAccountId);
-                        const [fromAccDoc, toAccDoc] = await Promise.all([transaction.get(fromAccRef), transaction.get(toAccRef)]);
-                        if (!fromAccDoc.exists() || !toAccDoc.exists()) throw new Error("계좌를 찾을 수 없습니다.");
-                        if (fromAccDoc.data().currency !== toAccDoc.data().currency) throw new Error("현재 다른 통화 간 이체는 지원되지 않습니다.");
-                        
-                        transaction.update(fromAccRef, { balance: fromAccDoc.data().balance - finalAmount });
-                        transaction.update(toAccRef, { balance: toAccDoc.data().balance + finalAmount });
-                        transaction.set(newTransactionRef, dataForSubmit);
-                    }
-                    alert('추가가 완료되었습니다.');
-                }
-            });
+            if (isEditing) {
+                const transRef = doc(db, `users/${user.uid}/transactions`, transactionToEdit.id);
+                await setDoc(transRef, dataForSubmit, { merge: true });
+                alert('수정이 완료되었습니다.');
+            } else {
+                const newTransactionRef = doc(collection(db, `users/${user.uid}/transactions`));
+                await setDoc(newTransactionRef, dataForSubmit);
+                alert('추가가 완료되었습니다.');
+            }
             onFinish();
         } catch (error) {
             console.error("거래 처리 실패:", error);
@@ -1169,13 +1142,13 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                         {currencies.map(c => <option key={c.symbol} value={c.symbol}>{c.symbol}</option>)}
                     </select>
                  </div>
-                 {convertedAmount && <p className="text-sm text-gray-500 text-center">≈ {formatCurrency(convertedAmount, accounts.find(a=>a.id === (type === 'transfer' ? formData.fromAccountId : formData.accountId))?.currency)}</p>}
+                 {convertedAmount && <p className="text-sm text-gray-500 text-center">≈ {formatNumber(convertedAmount)} {accounts.find(a=>a.id === (type === 'transfer' ? formData.fromAccountId : formData.accountId))?.currency}</p>}
                  
                 {(type === 'expense' || type === 'income') && (
                     <>
                         <select name="accountId" required className="w-full p-2 border rounded-md" value={formData.accountId} onChange={handleChange}>
                            <option value="">{type === 'expense' ? '출금' : '입금'} 계좌 선택</option>
-                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({formatCurrency(acc.balance, acc.currency)})</option>)}
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
                         </select>
                         <input name="category" placeholder="카테고리 (예: 식비)" value={formData.category} onChange={handleChange} className="w-full p-2 border rounded-md"/>
                     </>
@@ -1193,11 +1166,11 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                     <>
                        <select name="fromAccountId" required className="w-full p-2 border rounded-md" value={formData.fromAccountId} onChange={handleChange}>
                             <option value="">보내는 계좌</option>
-                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({formatCurrency(acc.balance, acc.currency)})</option>)}
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
                         </select>
                         <select name="toAccountId" required className="w-full p-2 border rounded-md" value={formData.toAccountId} onChange={handleChange}>
                             <option value="">받는 계좌</option>
-                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({formatCurrency(acc.balance, acc.currency)})</option>)}
+                            {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
                         </select>
                     </>
                 )}
