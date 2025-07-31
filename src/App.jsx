@@ -227,7 +227,7 @@ export default function HouseholdApp() {
     // --- 모달 및 뷰 전환 관리 ---
     const handleOpenAddTransactionModal = () => { setEditingTransaction(null); setShowTransactionModal(true); };
     const handleOpenEditTransactionModal = (transaction) => { setEditingTransaction(transaction); setShowTransactionModal(true); };
-    const handleOpenAddScheduleModal = () => { setEditingSchedule(null); setShowScheduleModal(true); };
+    const handleOpenAddScheduleModal = (type) => { setEditingSchedule({ type }); setShowScheduleModal(true); };
     const handleOpenEditScheduleModal = (schedule) => { setEditingSchedule(schedule); setShowScheduleModal(true); };
     const handleAccountClick = (accountId) => {
         setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '' }));
@@ -244,7 +244,7 @@ export default function HouseholdApp() {
     };
 
     const handleDeleteSchedule = async (scheduleId) => {
-        if (!window.confirm("이 예정된 수입을 삭제하시겠습니까?")) return;
+        if (!window.confirm("이 예정된 항목을 삭제하시겠습니까?")) return;
         try {
             await deleteDoc(doc(db, `users/${user.uid}/schedules`, scheduleId));
             alert("삭제되었습니다.");
@@ -339,7 +339,12 @@ export default function HouseholdApp() {
 // --- 뷰 컴포넌트들 ---
 function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, transactions, accountsById, cardsById, schedules, convertToKRW }) {
     const recentTransactions = transactions.slice(0, 5);
-    const nextUpcomingSchedule = useMemo(() => schedules.filter(s => !s.isCompleted).sort((a, b) => a.date.toDate().getTime() - b.date.toDate().getTime())[0], [schedules]);
+    const upcomingSchedules = useMemo(() => schedules.filter(s => !s.isCompleted).sort((a, b) => a.date.toDate().getTime() - b.date.toDate().getTime()), [schedules]);
+    const upcomingIncome = upcomingSchedules.filter(s => s.type === 'income');
+    const upcomingExpense = upcomingSchedules.filter(s => s.type === 'expense');
+
+    const totalUpcomingIncome = upcomingIncome.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
+    const totalUpcomingExpense = upcomingExpense.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
 
     return (
         <div>
@@ -347,17 +352,8 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-gray-500">총 자산 (예상)</h3><p className="text-3xl font-bold mt-2 text-indigo-600">{formatCurrency(totalAssetInKRW)}</p></div>
                 <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-gray-500">총 현금성 자산</h3><p className="text-3xl font-bold mt-2">{formatCurrency(totalCashAssetInKRW)}</p></div>
-                <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-gray-500">결제 예정 카드값</h3><p className="text-3xl font-bold mt-2 text-red-500">{formatCurrency(upcomingPayments.reduce((sum, p) => sum + p.amount, 0))}</p></div>
-                <div className="bg-white p-6 rounded-xl shadow-md">
-                    <h3 className="text-gray-500">가까운 예정 수입</h3>
-                    {nextUpcomingSchedule ? (
-                         <div>
-                            <p className="text-2xl font-bold mt-2 text-blue-500">{formatCurrency(convertToKRW(nextUpcomingSchedule.amount, accountsById[nextUpcomingSchedule.accountId]?.currency))}</p>
-                            <p className="text-sm text-gray-400 truncate" title={nextUpcomingSchedule.description}>{nextUpcomingSchedule.description}</p>
-                            <p className="text-sm text-gray-400">{nextUpcomingSchedule.date.toDate().toLocaleDateString()}</p>
-                         </div>
-                    ) : <p className="text-gray-400 mt-2">예정된 수입 없음</p>}
-                </div>
+                <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-gray-500">총 예정 수입</h3><p className="text-3xl font-bold mt-2 text-blue-500">{formatCurrency(totalUpcomingIncome)}</p></div>
+                <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-gray-500">총 예정 지출</h3><p className="text-3xl font-bold mt-2 text-red-500">{formatCurrency(totalUpcomingExpense + upcomingPayments.reduce((sum, p) => sum + p.amount, 0))}</p></div>
             </div>
             
              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -386,20 +382,15 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
                     </ul>
                  </div>
                  <div className="bg-white p-6 rounded-xl shadow-md">
-                    <h3 className="text-xl font-semibold mb-4">결제 예정 내역</h3>
-                     {upcomingPayments.length > 0 ? (
-                        <ul>
-                            {upcomingPayments.map(p => (
-                                <li key={p.cardId} className="flex justify-between items-center py-2 border-b last:border-b-0">
-                                    <div>
-                                        <p className="font-semibold">{p.cardName} 결제 예정</p>
-                                        <p className="text-sm text-gray-500">연결계좌: {accountsById[p.linkedAccountId]?.name || '없음'}</p>
-                                    </div>
-                                    <span className="font-bold text-red-500">{formatCurrency(p.amount)}</span>
-                                </li>
-                            ))}
-                        </ul>
-                     ) : <p className="text-gray-500 mt-4">결제 예정 내역이 없습니다.</p>}
+                    <h3 className="text-xl font-semibold mb-4">다가오는 일정</h3>
+                    <h4 className="font-semibold text-blue-600 mt-4 mb-2">예정 수입</h4>
+                    {upcomingIncome.length > 0 ? (
+                        <ul> {upcomingIncome.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)} </ul>
+                    ) : <p className="text-sm text-gray-500">예정된 수입이 없습니다.</p>}
+                    <h4 className="font-semibold text-red-600 mt-4 mb-2">예정 지출</h4>
+                    {upcomingExpense.length > 0 ? (
+                        <ul> {upcomingExpense.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)} </ul>
+                    ) : <p className="text-sm text-gray-500">예정된 지출이 없습니다.</p>}
                  </div>
             </div>
         </div>
@@ -1206,7 +1197,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                 <textarea name="memo" value={formData.memo} onChange={handleChange} placeholder="메모 (선택)" className="w-full p-2 border rounded-md" rows="2"></textarea>
                 <div className="flex justify-end space-x-2 pt-4">
                     <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
-                    <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg">저장</button>
+                    <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded-lg">저장</button>
                 </div>
             </form>
         </div>
