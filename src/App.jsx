@@ -1,4 +1,4 @@
-import React, 'react';
+import React from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, addDoc, getDocs, writeBatch, query, onSnapshot, setDoc, deleteDoc, Timestamp, runTransaction, where } from 'firebase/firestore';
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, browserLocalPersistence, setPersistence, signInAnonymously, setLogLevel } from 'firebase/auth';
