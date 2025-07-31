@@ -1,14 +1,20 @@
 import React from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, addDoc, getDocs, writeBatch, query, onSnapshot, setDoc, deleteDoc, Timestamp, runTransaction, where } from 'firebase/firestore';
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, browserLocalPersistence, setPersistence, signInAnonymously } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, browserLocalPersistence, setPersistence } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 // --- Firebase 설정 ---
-// 참고: 이 코드는 __firebase_config 및 __initial_auth_token 전역 변수가 제공되는
-// 특정 환경에서 실행되도록 설계되었습니다.
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// Vite 환경 변수(.env 파일)를 사용하여 Firebase 설정을 구성합니다.
+// Netlify 대시보드에서 이 변수들을 설정해야 합니다.
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_API_KEY,
+  authDomain: import.meta.env.VITE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_APP_ID,
+};
 
 // --- 앱 초기화 ---
 if (!firebaseConfig.projectId) {
@@ -116,22 +122,8 @@ export default function HouseholdApp() {
 
     // --- Firebase 인증 ---
     React.useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-            if (currentUser) {
-                setUser(currentUser);
-            } else {
-                // __initial_auth_token이 없으면 익명으로 로그인 시도
-                if (typeof __initial_auth_token === 'undefined') {
-                    try {
-                        await signInAnonymously(auth);
-                    } catch(error) {
-                        console.error("익명 로그인 실패:", error);
-                        setIsLoading(false);
-                    }
-                } else {
-                     setUser(null);
-                }
-            }
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
             setIsLoading(false);
         });
         return () => unsubscribe();
@@ -324,7 +316,7 @@ export default function HouseholdApp() {
     };
 
     if (isLoading) return <div className="flex justify-center items-center h-screen bg-gray-100"><div className="text-xl font-bold">로딩 중...</div></div>;
-    if (!user || user.isAnonymous) return <LoginScreen onGoogleSignIn={handleGoogleSignIn} />;
+    if (!user) return <LoginScreen onGoogleSignIn={handleGoogleSignIn} />;
 
     return (
         <div className="bg-gray-50 min-h-screen font-sans text-gray-800">
