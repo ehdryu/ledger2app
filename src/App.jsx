@@ -112,8 +112,8 @@ export default function HouseholdApp() {
                 switch(colName) {
                     case 'accounts': setAccounts(data); break;
                     case 'cards': setCards(data); break;
-                    case 'transactions': setTransactions(data.sort((a, b) => b.date.toDate().getTime() - a.date.toDate().getTime())); break;
-                    case 'schedules': setSchedules(data.sort((a,b) => a.date.toDate().getTime() - b.date.toDate().getTime())); break;
+                    case 'transactions': setTransactions(data.sort((a, b) => (b.date?.toDate()?.getTime() || 0) - (a.date?.toDate()?.getTime() || 0))); break;
+                    case 'schedules': setSchedules(data.sort((a,b) => (a.date?.toDate()?.getTime() || 0) - (b.date?.toDate()?.getTime() || 0))); break;
                     case 'currencies': 
                         if (!data.some(c => c.symbol === 'KRW')) {
                              setDoc(doc(db, `users/${user.uid}/currencies`, 'KRW'), { symbol: 'KRW', name: '대한민국 원', rate: 1, isBase: true });
@@ -121,7 +121,7 @@ export default function HouseholdApp() {
                         setCurrencies(data);
                         break;
                     case 'categories': setCategories(data.sort((a,b) => a.name.localeCompare(b.name))); break;
-                    case 'memos': setMemos(data.sort((a,b) => b.createdAt?.toDate().getTime() - a.createdAt?.toDate().getTime())); break;
+                    case 'memos': setMemos(data.sort((a,b) => (b.createdAt?.toDate()?.getTime() || 0) - (a.createdAt?.toDate()?.getTime() || 0))); break;
                     default: break;
                 }
             }, (error) => console.error(`${colName} 데이터 로딩 실패:`, error));
