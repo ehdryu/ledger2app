@@ -2,7 +2,7 @@ import React from 'react';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, addDoc, getDocs, writeBatch, query, onSnapshot, setDoc, deleteDoc, Timestamp, runTransaction, where } from 'firebase/firestore';
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, browserLocalPersistence, setPersistence } from 'firebase/auth';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 // --- Firebase 설정 ---
 // Vite 환경 변수(.env 파일)를 사용하여 Firebase 설정을 구성합니다.
@@ -28,9 +28,9 @@ const auth = getAuth(app);
 const ICONS = {
     "은행": "🏦", "증권": "💹", "코인": "🪙", "현금": "💵", "카드": "💳", "기타": " miscellaneous",
     "수입": "💰", "지출": "💸", "이체": "🔄", "대시보드": "📊", "거래내역": "🧾", "계좌관리": "💼",
-    "리포트": "📈", "데이터": "💾", "스케줄": "📅", "환율": "💱"
+    "리포트": "📈", "데이터": "💾", "스케줄": "📅", "환율": "💱", "예산": "🎯", "템플릿": "📋"
 };
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#da70d6'];
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#da70d6', '#a4de6c', '#d0ed57', '#ffc658'];
 
 const formatCurrency = (amount, currency = 'KRW') => {
     try {
@@ -104,7 +104,7 @@ export default function HouseholdApp() {
     const [showTransactionModal, setShowTransactionModal] = React.useState(false);
     const [showScheduleModal, setShowScheduleModal] = React.useState(false);
     const [isNavOpen, setIsNavOpen] = React.useState(false);
-    const [transactionFilter, setTransactionFilter] = React.useState({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '' });
+    const [transactionFilter, setTransactionFilter] = React.useState({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '' });
 
     const [accounts, setAccounts] = React.useState([]);
     const [cards, setCards] = React.useState([]);
@@ -113,6 +113,8 @@ export default function HouseholdApp() {
     const [currencies, setCurrencies] = React.useState([]);
     const [categories, setCategories] = React.useState([]);
     const [memos, setMemos] = React.useState([]);
+    const [budgets, setBudgets] = React.useState([]);
+    const [templates, setTemplates] = React.useState([]);
 
     const [modal, setModal] = React.useState({ isOpen: false, message: '', onConfirm: null });
     const [alert, setAlert] = React.useState({ isOpen: false, message: '' });
@@ -133,7 +135,7 @@ export default function HouseholdApp() {
     React.useEffect(() => {
         if (!user) return;
 
-        const collectionsToWatch = ['accounts', 'cards', 'transactions', 'schedules', 'currencies', 'categories', 'memos'];
+        const collectionsToWatch = ['accounts', 'cards', 'transactions', 'schedules', 'currencies', 'categories', 'memos', 'budgets', 'templates'];
         const unsubscribes = collectionsToWatch.map(colName => {
             const q = query(collection(db, `users/${user.uid}/${colName}`));
             return onSnapshot(q, (querySnapshot) => {
@@ -151,6 +153,8 @@ export default function HouseholdApp() {
                         break;
                     case 'categories': setCategories(data.sort((a, b) => a.name.localeCompare(b.name))); break;
                     case 'memos': setMemos(data.sort((a, b) => (b.createdAt?.toDate()?.getTime() || 0) - (a.createdAt?.toDate()?.getTime() || 0))); break;
+                    case 'budgets': setBudgets(data.sort((a, b) => (b.startDate?.toDate()?.getTime() || 0) - (a.startDate?.toDate()?.getTime() || 0))); break;
+                    case 'templates': setTemplates(data); break;
                     default: break;
                 }
             }, (error) => console.error(`${colName} 데이터 로딩 실패:`, error));
@@ -182,7 +186,7 @@ export default function HouseholdApp() {
 
                 if (t.accountId === account.id) {
                     if (t.type === 'income') balances[currency] = (balances[currency] || 0) + amount;
-                    if (t.type === 'expense') balances[currency] = (balances[currency] || 0) - amount;
+                    if (t.type === 'expense' || t.type === 'payment') balances[currency] = (balances[currency] || 0) - amount;
                 }
                 if (t.type === 'transfer') {
                     if (t.accountId === account.id) balances[currency] = (balances[currency] || 0) - amount;
@@ -219,7 +223,7 @@ export default function HouseholdApp() {
                 .filter(t => t.type === 'card-expense' && t.cardId === card.id && !t.isPaid && t.date.toDate() >= usageStart && t.date.toDate() <= usageEnd)
                 .reduce((sum, t) => sum + t.amount, 0);
 
-            return { cardId: card.id, cardName: card.name, linkedAccountId: card.linkedAccountId, amount };
+            return { id: `card-${card.id}`, cardId: card.id, description: `${card.name} 결제 예정`, amount, date: new Date(today.getFullYear(), today.getMonth() + (today.getDate() < paymentDay ? 0 : 1), paymentDay), isCardPayment: true };
         });
 
         const totalUpcomingPaymentAmount = cardPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -247,19 +251,19 @@ export default function HouseholdApp() {
     const handleSignOut = async () => {
         try {
             await signOut(auth);
-            setUser(null); // 로그아웃 후 user 상태를 null로 설정
+            setUser(null);
         } catch (error) {
             console.error("로그아웃 실패:", error);
         }
     };
 
     // --- 모달 및 뷰 전환 관리 ---
-    const handleOpenAddTransactionModal = () => { setEditingTransaction(null); setShowTransactionModal(true); };
+    const handleOpenAddTransactionModal = (template = null) => { setEditingTransaction(template); setShowTransactionModal(true); };
     const handleOpenEditTransactionModal = (transaction) => { setEditingTransaction(transaction); setShowTransactionModal(true); };
     const handleOpenAddScheduleModal = () => { setEditingSchedule(null); setShowScheduleModal(true); };
     const handleOpenEditScheduleModal = (schedule) => { setEditingSchedule(schedule); setShowScheduleModal(true); };
     const handleAccountClick = (accountId) => {
-        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '' }));
+        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '' }));
         setActiveView('transactions');
     };
 
@@ -273,7 +277,6 @@ export default function HouseholdApp() {
                 console.error("거래 삭제 실패:", error);
                 showAlert(`삭제 실패: ${error.message}`);
             }
-            setModal({ isOpen: false });
         });
     };
 
@@ -286,14 +289,13 @@ export default function HouseholdApp() {
                 console.error("스케줄 삭제 실패:", error);
                 showAlert(`삭제 실패: ${error.message}`);
             }
-            setModal({ isOpen: false });
         });
     };
 
     // --- 뷰 렌더링 ---
     const renderView = () => {
         const props = {
-            user, accounts: accountsWithCalculatedBalances, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW, categories, memos,
+            user, accounts: accountsWithCalculatedBalances, cards, transactions, schedules, currencies, accountsById, cardsById, rates, convertToKRW, categories, memos, budgets, templates,
             onAddTransaction: handleOpenAddTransactionModal,
             onEditTransaction: handleOpenEditTransactionModal,
             onDeleteTransaction: handleDeleteTransaction,
@@ -308,7 +310,8 @@ export default function HouseholdApp() {
             case 'transactions': return <TransactionsView {...props} filter={transactionFilter} setFilter={setTransactionFilter} />;
             case 'management': return <ManagementView {...props} totalCashAssetInKRW={totalCashAssetInKRW} assetsByCurrency={assetsByCurrency} />;
             case 'schedule': return <ScheduleView {...props} upcomingPayments={upcomingPayments} />;
-            case 'currencies': return <CurrencyView {...props} />;
+            case 'budget': return <BudgetView {...props} />;
+            case 'templates': return <TemplatesView {...props} />;
             case 'reports': return <ReportsView {...props} />;
             case 'data': return <DataIOView {...props} />;
             default: return <div>뷰를 찾을 수 없습니다.</div>;
@@ -326,7 +329,6 @@ export default function HouseholdApp() {
                     <h1 className="text-2xl font-bold text-indigo-600">가계부</h1>
                     <button onClick={() => setIsNavOpen(false)} className="md:hidden text-gray-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
                 </div>
-                {/* 사용자 정보 표시 */}
                 <div className="mb-8 text-center">
                     <img src={user.photoURL || `https://placehold.co/80x80/e2e8f0/e2e8f0?text=${user.displayName?.[0] || 'U'}`} alt="Profile" className="w-20 h-20 rounded-full mx-auto mb-2" />
                     <p className="font-semibold">{user.displayName || '사용자'}</p>
@@ -338,7 +340,8 @@ export default function HouseholdApp() {
                         { id: 'transactions', name: '거래내역', icon: '거래내역' },
                         { id: 'management', name: '계좌/카드 관리', icon: '계좌관리' },
                         { id: 'schedule', name: '스케줄 관리', icon: '스케줄' },
-                        { id: 'currencies', name: '환율/시세 관리', icon: '환율' },
+                        { id: 'budget', name: '예산 관리', icon: '예산' },
+                        { id: 'templates', name: '자주 쓰는 거래', icon: '템플릿' },
                         { id: 'reports', name: '리포트', icon: '리포트' },
                         { id: 'data', name: '데이터 관리', icon: '데이터' },
                     ].map(view => (
@@ -365,7 +368,7 @@ export default function HouseholdApp() {
             </div>
             {showTransactionModal && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
-                    <TransactionForm user={user} accounts={accounts} cards={cards} onFinish={() => setShowTransactionModal(false)} transactionToEdit={editingTransaction} db={db} currencies={currencies} rates={rates} categories={categories} showAlert={showAlert} />
+                    <TransactionForm user={user} accounts={accounts} cards={cards} onFinish={() => setShowTransactionModal(false)} transactionToEdit={editingTransaction} db={db} currencies={currencies} categories={categories} showAlert={showAlert} />
                 </div>
             )}
             {showScheduleModal && (
@@ -379,7 +382,7 @@ export default function HouseholdApp() {
     );
 }
 
-// --- 뷰 컴포넌트들 (이하 동일, 일부 수정) ---
+// --- 뷰 컴포넌트들 ---
 
 function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, transactions, accountsById, cardsById, schedules, convertToKRW }) {
     const recentTransactions = transactions.slice(0, 5);
@@ -457,8 +460,9 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
             let dateMatch = filter.year === 'all' ? true : date.getFullYear() === Number(filter.year) && (filter.month === 'all' ? true : (date.getMonth() + 1) === Number(filter.month));
             const categoryMatch = filter.category === 'all' || t.category === filter.category;
             const searchMatch = filter.search === '' || t.description.toLowerCase().includes(filter.search.toLowerCase()) || (t.memo && t.memo.toLowerCase().includes(filter.search.toLowerCase()));
+            const tagMatch = filter.tag === '' || (t.tags && t.tags.includes(filter.tag));
 
-            return typeMatch && accountMatch && dateMatch && categoryMatch && searchMatch;
+            return typeMatch && accountMatch && dateMatch && categoryMatch && searchMatch && tagMatch;
         });
     }, [transactions, filter]);
 
@@ -466,10 +470,11 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold">전체 거래 내역</h2>
-                <button onClick={onAddTransaction} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
+                <button onClick={() => onAddTransaction()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
             </div>
             <div className="flex flex-wrap gap-4 mb-4 bg-white p-4 rounded-xl shadow-sm">
-                <input type="text" placeholder="내용/메모 검색..." value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })} className="p-2 border rounded-lg bg-white flex-grow" />
+                <input type="text" placeholder="내용/메모 검색..." value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })} className="p-2 border rounded-lg bg-white flex-grow"/>
+                <input type="text" placeholder="태그 검색..." value={filter.tag} onChange={e => setFilter({...filter, tag: e.target.value})} className="p-2 border rounded-lg bg-white"/>
                 <select value={filter.type} onChange={e => setFilter({ ...filter, type: e.target.value })} className="p-2 border rounded-lg bg-white">
                     <option value="all">모든 종류</option><option value="income">수입</option><option value="expense">지출(계좌)</option><option value="card-expense">지출(카드)</option><option value="payment">카드대금</option><option value="transfer">이체</option>
                 </select>
@@ -497,7 +502,7 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
                         const displayCurrency = t.originalCurrency || account.currency || (t.type === 'card-expense' ? 'KRW' : '');
                         const displayAmount = t.originalAmount ?? t.amount;
                         return (
-                            <li key={t.id} className="py-4 flex items-center justify-between">
+                            <li key={t.id} className="py-4 flex items-center justify-between flex-wrap">
                                 <div className="flex items-center">
                                     <span className="text-2xl mr-4">{ICONS[t.type === 'income' ? '수입' : t.type.includes('expense') || t.type === 'payment' ? '지출' : '이체']}</span>
                                     <div>
@@ -510,9 +515,14 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
                                                 {t.isPaid && <span className="text-xs text-green-600 ml-2">(결제완료)</span>}
                                             </span>
                                         </p>
+                                        {t.tags && t.tags.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                {t.tags.map(tag => <span key={tag} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full">#{tag}</span>)}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
-                                <div className="flex items-center space-x-2 sm:space-x-4">
+                                <div className="flex items-center space-x-2 sm:space-x-4 mt-2 sm:mt-0">
                                     <div className={`text-lg font-bold ${t.type === 'income' ? 'text-blue-600' : 'text-red-600'}`}>
                                         {t.type === 'income' ? '+' : '-'} {formatNumber(displayAmount)} {displayCurrency !== 'KRW' ? displayCurrency : ''}
                                     </div>
@@ -535,7 +545,7 @@ function ManagementView({ user, accounts, cards, transactions, onAddTransaction,
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold">계좌/카드 관리</h2>
-                <button onClick={onAddTransaction} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
+                <button onClick={() => onAddTransaction()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
             </div>
 
             <div className="bg-white p-6 rounded-xl shadow-md mb-6">
@@ -570,51 +580,52 @@ function ManagementView({ user, accounts, cards, transactions, onAddTransaction,
 function AccountList({ user, accounts, currencies, db, onAccountClick, showAlert, showConfirm }) {
     const [editingAccount, setEditingAccount] = React.useState(null);
     const [filter, setFilter] = React.useState('all');
-    const [sort, setSort] = React.useState('default');
+    const [sort, setSort] = React.useState('balance-desc'); // 기본 정렬 변경
 
     const accountCategories = React.useMemo(() => ['all', ...Array.from(new Set(accounts.map(acc => acc.category)))], [accounts]);
 
     const displayedAccounts = React.useMemo(() => {
-        let processedAccounts = accounts;
+        let processedAccounts = [...accounts];
         if (filter !== 'all') {
             processedAccounts = processedAccounts.filter(acc => acc.category === filter);
         }
 
         switch (sort) {
-            case 'name-asc': return [...processedAccounts].sort((a, b) => a.name.localeCompare(b.name));
-            case 'name-desc': return [...processedAccounts].sort((a, b) => b.name.localeCompare(a.name));
-            case 'balance-asc': return [...processedAccounts].sort((a, b) => a.totalKRW - b.totalKRW);
-            case 'balance-desc': return [...processedAccounts].sort((a, b) => b.totalKRW - a.totalKRW);
-            case 'category': return [...processedAccounts].sort((a, b) => a.category.localeCompare(b.category));
-            default: return processedAccounts;
+            case 'name-asc': return processedAccounts.sort((a, b) => a.name.localeCompare(b.name));
+            case 'name-desc': return processedAccounts.sort((a, b) => b.name.localeCompare(a.name));
+            case 'balance-asc': return processedAccounts.sort((a, b) => a.totalKRW - b.totalKRW);
+            case 'balance-desc': return processedAccounts.sort((a, b) => b.totalKRW - a.totalKRW);
+            case 'category': return processedAccounts.sort((a, b) => a.category.localeCompare(b.category));
+            default: return processedAccounts.sort((a, b) => b.totalKRW - a.totalKRW);
         }
     }, [accounts, filter, sort]);
 
     const handleEditClick = (e, account) => {
-        e.stopPropagation(); // 부모 클릭 이벤트 방지
+        e.stopPropagation();
         setEditingAccount(account);
     };
 
     const handleDeleteAccount = async (e, accountId) => {
         e.stopPropagation();
         showConfirm("정말로 계좌를 삭제하시겠습니까? 연결된 모든 거래 내역도 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다.", async () => {
-            const batch = writeBatch(db);
+            try {
+                const batch = writeBatch(db);
+                const accountRef = doc(db, `users/${user.uid}/accounts`, accountId);
+                batch.delete(accountRef);
 
-            // 1. 계좌 문서 삭제
-            const accountRef = doc(db, `users/${user.uid}/accounts`, accountId);
-            batch.delete(accountRef);
+                const transactionsRef = collection(db, `users/${user.uid}/transactions`);
+                const q1 = query(transactionsRef, where("accountId", "==", accountId));
+                const q2 = query(transactionsRef, where("toAccountId", "==", accountId));
 
-            // 2. 이 계좌와 관련된 거래내역 삭제 (출금, 입금, 이체 모두 포함)
-            const transactionsRef = collection(db, `users/${user.uid}/transactions`);
-            const q1 = query(transactionsRef, where("accountId", "==", accountId));
-            const q2 = query(transactionsRef, where("toAccountId", "==", accountId));
+                const [fromSnapshot, toSnapshot] = await Promise.all([getDocs(q1), getDocs(q2)]);
+                fromSnapshot.forEach(doc => batch.delete(doc.ref));
+                toSnapshot.forEach(doc => batch.delete(doc.ref));
 
-            const [fromSnapshot, toSnapshot] = await Promise.all([getDocs(q1), getDocs(q2)]);
-            fromSnapshot.forEach(doc => batch.delete(doc.ref));
-            toSnapshot.forEach(doc => batch.delete(doc.ref));
-
-            await batch.commit();
-            showAlert("계좌와 관련 거래내역이 삭제되었습니다.");
+                await batch.commit();
+                showAlert("계좌와 관련 거래내역이 삭제되었습니다.");
+            } catch (error) {
+                showAlert(`삭제 실패: ${error.message}`);
+            }
         });
     }
 
@@ -629,11 +640,10 @@ function AccountList({ user, accounts, currencies, db, onAccountClick, showAlert
                             {accountCategories.map(cat => <option key={cat} value={cat}>{cat === 'all' ? '모든 카테고리' : cat}</option>)}
                         </select>
                         <select value={sort} onChange={e => setSort(e.target.value)} className="p-2 border rounded-lg bg-white">
-                            <option value="default">기본 정렬</option>
-                            <option value="name-asc">이름순 (ㄱ-ㅎ)</option>
-                            <option value="name-desc">이름 역순 (ㅎ-ㄱ)</option>
                             <option value="balance-desc">잔액 많은 순</option>
                             <option value="balance-asc">잔액 적은 순</option>
+                            <option value="name-asc">이름순 (ㄱ-ㅎ)</option>
+                            <option value="name-desc">이름 역순 (ㅎ-ㄱ)</option>
                             <option value="category">카테고리순</option>
                         </select>
                     </div>
@@ -668,10 +678,7 @@ function AccountList({ user, accounts, currencies, db, onAccountClick, showAlert
 function AccountForm({ user, accountToEdit, currencies, onFinish, db, showAlert }) {
     const isEditing = !!accountToEdit;
     const [formData, setFormData] = React.useState({
-        name: '',
-        category: '은행',
-        initialBalance: '',
-        currency: 'KRW',
+        name: '', category: '은행', initialBalance: '', currency: 'KRW',
     });
 
     React.useEffect(() => {
@@ -705,7 +712,7 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db, showAlert 
                 onFinish();
             } else {
                 await addDoc(collection(db, `users/${user.uid}/accounts`), { ...dataToSave, createdAt: Timestamp.now() });
-                setFormData({ name: '', category: '은행', initialBalance: '', currency: 'KRW' }); // Reset form
+                setFormData({ name: '', category: '은행', initialBalance: '', currency: 'KRW' });
             }
         } catch (error) {
             showAlert(`저장 실패: ${error.message}`);
@@ -738,14 +745,15 @@ function AccountForm({ user, accountToEdit, currencies, onFinish, db, showAlert 
 
 function CardList({ user, cards, accounts, transactions, db, showAlert, showConfirm }) {
     const [editingCard, setEditingCard] = React.useState(null);
+    const [filter, setFilter] = React.useState('all');
 
-    const handleEditClick = (card) => {
-        setEditingCard(card);
-    };
+    const displayedCards = React.useMemo(() => {
+        if (filter === 'all') return cards;
+        return cards.filter(card => card.linkedAccountId === filter);
+    }, [cards, filter]);
 
-    const handleCancelEdit = () => {
-        setEditingCard(null);
-    };
+    const handleEditClick = (card) => setEditingCard(card);
+    const handleCancelEdit = () => setEditingCard(null);
 
     const handleDeleteCard = async (id) => {
         showConfirm("정말로 신용카드를 삭제하시겠습니까? 연결된 거래 내역은 유지됩니다.", async () => {
@@ -758,19 +766,12 @@ function CardList({ user, cards, accounts, transactions, db, showAlert, showConf
         showConfirm(`${formatCurrency(amount)}을 결제 처리하시겠습니까?`, async () => {
             try {
                 await runTransaction(db, async (transaction) => {
-                    // 카드 대금 결제는 원화(KRW) 계좌에서만 가능하다고 가정
                     const newTransRef = doc(collection(db, `users/${user.uid}/transactions`));
                     transaction.set(newTransRef, {
-                        type: 'payment',
-                        accountId: linkedAccountId,
-                        amount,
-                        originalAmount: amount,
-                        originalCurrency: 'KRW',
+                        type: 'payment', accountId: linkedAccountId, amount, originalAmount: amount, originalCurrency: 'KRW',
                         description: `${cards.find(c => c.id === cardId)?.name} 카드대금 결제`,
-                        date: Timestamp.now(),
-                        paidCardTransactionIds: transactionsToPay.map(t => t.id)
+                        date: Timestamp.now(), paidCardTransactionIds: transactionsToPay.map(t => t.id)
                     });
-
                     transactionsToPay.forEach(t => {
                         const tRef = doc(db, `users/${user.uid}/transactions`, t.id);
                         transaction.update(tRef, { isPaid: true });
@@ -787,17 +788,16 @@ function CardList({ user, cards, accounts, transactions, db, showAlert, showConf
     return (
         <div className="bg-white p-6 rounded-xl shadow-md">
             {editingCard ? (
-                <CardForm
-                    user={user}
-                    cardToEdit={editingCard}
-                    accounts={accounts}
-                    onFinish={handleCancelEdit}
-                    db={db}
-                    showAlert={showAlert}
-                />
+                <CardForm user={user} cardToEdit={editingCard} accounts={accounts} onFinish={handleCancelEdit} db={db} showAlert={showAlert} />
             ) : (
                 <>
-                    {cards.map(card => {
+                    <div className="flex flex-wrap gap-4 mb-4">
+                        <select value={filter} onChange={e => setFilter(e.target.value)} className="p-2 border rounded-lg bg-white">
+                            <option value="all">모든 출금 계좌</option>
+                            {accounts.filter(a => a.currency === 'KRW').map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        </select>
+                    </div>
+                    {displayedCards.map(card => {
                         const today = new Date();
                         const paymentDay = card.paymentDay;
                         let usageStart = new Date(today.getFullYear(), today.getMonth() - (today.getDate() < paymentDay ? 1 : 0), card.usageStartDay);
@@ -839,11 +839,7 @@ function CardList({ user, cards, accounts, transactions, db, showAlert, showConf
 function CardForm({ user, cardToEdit, accounts, onFinish, db, showAlert }) {
     const isEditing = !!cardToEdit;
     const [formData, setFormData] = React.useState({
-        name: '',
-        paymentDay: 15,
-        usageStartDay: 1,
-        usageEndDay: 31,
-        linkedAccountId: '',
+        name: '', paymentDay: 15, usageStartDay: 1, usageEndDay: 31, linkedAccountId: '',
     });
 
     React.useEffect(() => {
@@ -987,81 +983,45 @@ function CurrencyView({ user, currencies, showAlert, showConfirm }) {
     );
 }
 
-function ScheduleView({ user, schedules, accounts, upcomingPayments, accountsById, onAddSchedule, onEditSchedule, onDeleteSchedule, memos, showAlert, showConfirm }) {
-    const [newMemo, setNewMemo] = React.useState("");
-    const [editingMemo, setEditingMemo] = React.useState(null);
-
-    const handleSaveMemo = async () => {
-        if (editingMemo) {
-            await setDoc(doc(db, `users/${user.uid}/memos`, editingMemo.id), { content: editingMemo.content }, { merge: true });
-            setEditingMemo(null);
-        } else if (newMemo.trim() !== "") {
-            await addDoc(collection(db, `users/${user.uid}/memos`), {
-                content: newMemo,
-                createdAt: Timestamp.now(),
-            });
-            setNewMemo("");
-        }
-    };
-
-    const handleDeleteMemo = async (id) => {
-        showConfirm("메모를 삭제하시겠습니까?", async () => {
-            await deleteDoc(doc(db, `users/${user.uid}/memos`, id));
-            showAlert("메모가 삭제되었습니다.");
-        });
-    };
+function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSchedule, onDeleteSchedule, upcomingPayments }) {
+    const allSchedules = React.useMemo(() => {
+        const combined = [...schedules, ...upcomingPayments];
+        return combined.sort((a,b) => a.date.toDate ? a.date.toDate().getTime() : a.date.getTime() - b.date.toDate ? b.date.toDate().getTime() : b.date.getTime());
+    }, [schedules, upcomingPayments]);
 
     return (
         <div>
-            <h2 className="text-3xl font-bold mb-6">스케줄 & 메모</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div>
-                    <div className="bg-white p-6 rounded-xl shadow-md">
-                        <button onClick={onAddSchedule} className="w-full bg-indigo-500 text-white hover:bg-indigo-600 p-3 rounded-lg">+ 새 예정 수입/지출 추가</button>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl shadow-md mt-6">
-                        <h3 className="text-xl font-semibold mb-4">예정된 항목 목록</h3>
-                        <ul className="divide-y divide-gray-200">
-                            {schedules.filter(s => !s.isCompleted).map(s => {
-                                const account = accountsById[s.accountId] || {};
-                                return (
-                                    <li key={s.id} className="py-3 flex justify-between items-center">
-                                        <div>
-                                            <p className="font-semibold">{s.description}</p>
-                                            <p className="text-sm text-gray-500">{s.date.toDate().toLocaleDateString()} → {account.name}</p>
-                                        </div>
-                                        <div className="flex items-center space-x-2">
-                                            <span className={`font-bold ${s.type === 'income' ? 'text-blue-600' : 'text-red-600'}`}>{formatNumber(s.amount)} {account.currency}</span>
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold">스케줄 관리</h2>
+                <button onClick={onAddSchedule} className="bg-indigo-500 text-white hover:bg-indigo-600 p-3 rounded-lg">+ 새 예정 수입/지출 추가</button>
+            </div>
+            <div className="bg-white p-6 rounded-xl shadow-md mt-6">
+                <h3 className="text-xl font-semibold mb-4">예정된 항목 목록</h3>
+                <ul className="divide-y divide-gray-200">
+                    {allSchedules.map(s => {
+                        const account = accountsById[s.accountId] || {};
+                        const date = s.date.toDate ? s.date.toDate() : s.date;
+                        const type = s.isCardPayment ? 'expense' : s.type;
+                        return (
+                            <li key={s.id} className="py-3 flex justify-between items-center">
+                                <div>
+                                    <p className="font-semibold">{s.description}</p>
+                                    <p className="text-sm text-gray-500">{date.toLocaleDateString()} {s.isCardPayment ? `(카드)` : `→ ${account.name}`}</p>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <span className={`font-bold ${type === 'income' ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrency(s.amount)}</span>
+                                    {!s.isCardPayment && (
+                                        <>
                                             <button onClick={() => onEditSchedule(s)} className="p-2 hover:bg-gray-200 rounded-full">✏️</button>
                                             <button onClick={() => onDeleteSchedule(s.id)} className="p-2 hover:bg-gray-200 rounded-full">🗑️</button>
-                                        </div>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    </div>
-                </div>
-                <div className="bg-white p-6 rounded-xl shadow-md">
-                    <h3 className="text-xl font-semibold mb-4">메모장</h3>
-                    <div className="flex gap-2 mb-4">
-                        <textarea value={editingMemo ? editingMemo.content : newMemo}
-                            onChange={(e) => editingMemo ? setEditingMemo({ ...editingMemo, content: e.target.value }) : setNewMemo(e.target.value)}
-                            className="w-full p-2 border rounded-md" rows="3" placeholder="간단한 메모를 남겨보세요..."></textarea>
-                        <button onClick={handleSaveMemo} className="bg-blue-500 text-white px-4 rounded-lg hover:bg-blue-600">{editingMemo ? '수정' : '저장'}</button>
-                        {editingMemo && <button onClick={() => setEditingMemo(null)} className="bg-gray-300 px-4 rounded-lg">취소</button>}
-                    </div>
-                    <ul className="divide-y divide-gray-200">
-                        {memos.map(memo => (
-                            <li key={memo.id} className="py-2 flex justify-between items-center">
-                                <p className="text-gray-700 whitespace-pre-wrap w-full">{memo.content}</p>
-                                <div className="flex">
-                                    <button onClick={() => setEditingMemo(memo)} className="p-2 hover:bg-gray-200 rounded-full text-sm">✏️</button>
-                                    <button onClick={() => handleDeleteMemo(memo.id)} className="p-2 hover:bg-gray-200 rounded-full text-sm">🗑️</button>
+                                        </>
+                                    )}
                                 </div>
                             </li>
-                        ))}
-                    </ul>
-                </div>
+                        );
+                    })}
+                     {allSchedules.length === 0 && <p className="text-gray-500 py-4">예정된 항목이 없습니다.</p>}
+                </ul>
             </div>
         </div>
     );
@@ -1073,7 +1033,7 @@ function ScheduleForm({ user, accounts, onFinish, scheduleToEdit, db, showAlert 
         amount: isEditing ? scheduleToEdit.amount : '',
         date: isEditing ? new Date(scheduleToEdit.date.toDate()).toISOString().slice(0, 16) : '',
         accountId: isEditing ? scheduleToEdit.accountId : '',
-        type: isEditing ? scheduleToEdit.type : 'income', // 수입/지출 타입 추가
+        type: isEditing ? scheduleToEdit.type : 'income',
     });
 
     const handleChange = (e) => {
@@ -1138,20 +1098,23 @@ function ScheduleForm({ user, accounts, onFinish, scheduleToEdit, db, showAlert 
 }
 
 
-function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, db, currencies, rates, categories, showAlert }) {
+function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, db, currencies, categories, showAlert }) {
     const isEditing = !!transactionToEdit;
+    const isTemplate = transactionToEdit && !transactionToEdit.id;
 
-    const [type, setType] = React.useState(isEditing ? transactionToEdit.type : 'expense');
+    const [type, setType] = React.useState(isEditing || isTemplate ? transactionToEdit.type : 'expense');
     const [formData, setFormData] = React.useState({
         date: isEditing ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
-        description: isEditing ? transactionToEdit.description : '',
-        inputAmount: isEditing ? transactionToEdit.originalAmount ?? transactionToEdit.amount : '',
-        category: isEditing ? transactionToEdit.category || '' : '',
-        memo: isEditing ? transactionToEdit.memo || '' : '',
-        accountId: isEditing ? transactionToEdit.accountId : '',
-        cardId: isEditing ? transactionToEdit.cardId : '',
+        description: isEditing || isTemplate ? transactionToEdit.description : '',
+        inputAmount: isEditing || isTemplate ? transactionToEdit.amount : '',
+        category: isEditing || isTemplate ? transactionToEdit.category || '' : '',
+        memo: isEditing || isTemplate ? transactionToEdit.memo || '' : '',
+        accountId: isEditing || isTemplate ? transactionToEdit.accountId : '',
+        cardId: isEditing || isTemplate ? transactionToEdit.cardId : '',
         fromAccountId: isEditing && transactionToEdit.type === 'transfer' ? transactionToEdit.accountId : '',
         toAccountId: isEditing ? transactionToEdit.toAccountId : '',
+        tags: isEditing && transactionToEdit.tags ? transactionToEdit.tags.join(', ') : '',
+        excludeFromBudget: isEditing ? transactionToEdit.excludeFromBudget || false : false,
     });
     const [inputCurrency, setInputCurrency] = React.useState('KRW');
 
@@ -1171,11 +1134,10 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
 
     const handleChange = (e) => {
-        const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
     };
     
-    // 이체 시 동일 계좌 선택 방지
     React.useEffect(() => {
         if (type === 'transfer' && formData.fromAccountId && formData.fromAccountId === formData.toAccountId) {
             setFormData(prev => ({...prev, toAccountId: ''}));
@@ -1188,9 +1150,10 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
         e.preventDefault();
 
         try {
+            const tagsArray = formData.tags.split(',').map(tag => tag.trim()).filter(Boolean);
             const dataForSubmit = {
                 description: formData.description,
-                amount: Number(formData.inputAmount), // amount 필드를 항상 originalAmount와 동일하게 저장
+                amount: Number(formData.inputAmount),
                 originalAmount: Number(formData.inputAmount),
                 originalCurrency: inputCurrency,
                 memo: formData.memo,
@@ -1201,9 +1164,11 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                 toAccountId: type === 'transfer' ? formData.toAccountId : null,
                 cardId: type === 'card-expense' ? formData.cardId : null,
                 isPaid: type === 'card-expense' ? (isEditing ? transactionToEdit.isPaid : false) : null,
+                tags: tagsArray,
+                excludeFromBudget: formData.excludeFromBudget,
             };
 
-            if (isEditing) {
+            if (isEditing && !isTemplate) {
                 const transRef = doc(db, `users/${user.uid}/transactions`, transactionToEdit.id);
                 await setDoc(transRef, dataForSubmit, { merge: true });
                 showAlert('수정이 완료되었습니다.');
@@ -1220,11 +1185,11 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
     return (
         <div className="bg-white p-6 rounded-xl shadow-lg max-w-lg mx-auto w-full">
-            <h2 className="text-2xl font-bold mb-4">{isEditing ? '거래 수정' : '거래 추가'}</h2>
+            <h2 className="text-2xl font-bold mb-4">{isEditing && !isTemplate ? '거래 수정' : '거래 추가'}</h2>
             <div className="flex mb-4 border-b">
                 {[{ id: 'expense', name: '지출(계좌)' }, { id: 'income', name: '수입' }, { id: 'card-expense', name: '지출(카드)' }, { id: 'transfer', name: '이체' }].map(t => (
-                    <button key={t.id} onClick={() => setType(t.id)} disabled={isEditing}
-                        className={`px-4 py-2 text-sm md:text-base ${type === t.id ? 'border-b-2 border-indigo-500 font-semibold text-indigo-600' : 'text-gray-500'} ${isEditing ? 'cursor-not-allowed opacity-50' : ''}`}>
+                    <button key={t.id} onClick={() => setType(t.id)} disabled={isEditing && !isTemplate}
+                        className={`px-4 py-2 text-sm md:text-base ${type === t.id ? 'border-b-2 border-indigo-500 font-semibold text-indigo-600' : 'text-gray-500'} ${isEditing && !isTemplate ? 'cursor-not-allowed opacity-50' : ''}`}>
                         {t.name}
                     </button>
                 ))}
@@ -1275,7 +1240,12 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                         </select>
                     </>
                 )}
+                <input name="tags" value={formData.tags} onChange={handleChange} placeholder="태그 (쉼표로 구분, 예: #가족, #휴가)" className="w-full p-2 border rounded-md" />
                 <textarea name="memo" value={formData.memo} onChange={handleChange} placeholder="메모 (선택)" className="w-full p-2 border rounded-md" rows="2"></textarea>
+                <div className="flex items-center">
+                    <input type="checkbox" id="excludeFromBudget" name="excludeFromBudget" checked={formData.excludeFromBudget} onChange={handleChange} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                    <label htmlFor="excludeFromBudget" className="ml-2 block text-sm text-gray-900">예산 관리에서 제외</label>
+                </div>
                 <div className="flex justify-end space-x-2 pt-4">
                     <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
                     <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg">저장</button>
@@ -1285,35 +1255,84 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
     );
 }
 
+// ... (CategoryView, DataIOView remain the same)
+
+// --- NEW/ENHANCED VIEWS ---
+
+function BudgetView({ user, budgets, transactions, categories, showAlert, showConfirm, db }) {
+    // ... Implementation for BudgetView
+    return <div className="text-center p-8 bg-white rounded-lg shadow">구현 예정인 기능입니다.</div>
+}
+
+function TemplatesView({ user, templates, onAddTransaction, showAlert, showConfirm, db }) {
+    // ... Implementation for TemplatesView
+    return <div className="text-center p-8 bg-white rounded-lg shadow">구현 예정인 기능입니다.</div>
+}
+
 function ReportsView({ transactions, convertToKRW, accountsById }) {
     const expenseData = React.useMemo(() => {
         const expenseByCategory = transactions
             .filter(t => (t.type === 'expense' || t.type === 'card-expense') && t.category)
             .reduce((acc, t) => {
-                const account = accountsById[t.accountId] || {};
-                const amountInKRW = t.type === 'card-expense' ? t.amount : convertToKRW(t.originalAmount, t.originalCurrency);
+                const amountInKRW = convertToKRW(t.originalAmount, t.originalCurrency);
                 acc[t.category] = (acc[t.category] || 0) + amountInKRW;
                 return acc;
             }, {});
         return Object.entries(expenseByCategory).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-    }, [transactions, convertToKRW, accountsById]);
+    }, [transactions, convertToKRW]);
+
+    const monthlyReportData = React.useMemo(() => {
+        const months = {};
+        transactions.forEach(t => {
+            const date = t.date.toDate();
+            const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            if (!months[month]) {
+                months[month] = { income: 0, expense: 0 };
+            }
+            const amountInKRW = convertToKRW(t.originalAmount, t.originalCurrency);
+            if (t.type === 'income') {
+                months[month].income += amountInKRW;
+            } else if (t.type === 'expense' || t.type === 'card-expense') {
+                months[month].expense += amountInKRW;
+            }
+        });
+        return Object.entries(months).map(([name, value]) => ({ name, ...value })).sort((a,b) => a.name.localeCompare(b.name)).slice(-6); // 마지막 6개월
+    }, [transactions, convertToKRW]);
 
     return (
         <div>
             <h2 className="text-3xl font-bold mb-6">리포트</h2>
-            <div className="bg-white p-6 rounded-xl shadow-md">
-                <h3 className="text-xl font-semibold mb-4">카테고리별 지출 분석 (KRW 환산)</h3>
-                {expenseData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={400}>
-                        <PieChart>
-                            <Pie data={expenseData} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} outerRadius={150} fill="#8884d8" dataKey="value">
-                                {expenseData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                            </Pie>
-                            <Tooltip formatter={(value) => formatCurrency(value)} />
-                            <Legend />
-                        </PieChart>
-                    </ResponsiveContainer>
-                ) : <p className="text-gray-500">분석할 지출 내역이 없습니다.</p>}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white p-6 rounded-xl shadow-md">
+                    <h3 className="text-xl font-semibold mb-4">카테고리별 지출 분석 (KRW 환산)</h3>
+                    {expenseData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={400}>
+                            <PieChart>
+                                <Pie data={expenseData} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} outerRadius={150} fill="#8884d8" dataKey="value">
+                                    {expenseData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                                </Pie>
+                                <Tooltip formatter={(value) => formatCurrency(value)} />
+                                <Legend />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    ) : <p className="text-gray-500">분석할 지출 내역이 없습니다.</p>}
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-md">
+                    <h3 className="text-xl font-semibold mb-4">최근 6개월 수입/지출 비교</h3>
+                     {monthlyReportData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={400}>
+                            <BarChart data={monthlyReportData}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="name" />
+                                <YAxis tickFormatter={(value) => `${value/10000}만`}/>
+                                <Tooltip formatter={(value) => formatCurrency(value)}/>
+                                <Legend />
+                                <Bar dataKey="income" fill="#8884d8" name="수입" />
+                                <Bar dataKey="expense" fill="#82ca9d" name="지출" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : <p className="text-gray-500">분석할 내역이 없습니다.</p>}
+                </div>
             </div>
         </div>
     );
@@ -1350,21 +1369,21 @@ function DataIOView({ user, accounts, cards, transactions, schedules, currencies
                 const data = JSON.parse(event.target.result);
                 showConfirm("데이터를 가져오시겠습니까? 기존의 모든 데이터는 삭제되고 이 파일의 데이터로 대체됩니다. 이 작업은 되돌릴 수 없습니다.", async () => {
                     const batch = writeBatch(db);
-                    const collections = ['accounts', 'cards', 'transactions', 'schedules', 'currencies', 'categories', 'memos'];
+                    const collections = ['accounts', 'cards', 'transactions', 'schedules', 'currencies', 'categories', 'memos', 'budgets', 'templates'];
 
-                    // Delete existing data
                     for (const col of collections) {
                         const snapshot = await getDocs(collection(db, `users/${user.uid}/${col}`));
                         snapshot.docs.forEach(doc => batch.delete(doc.ref));
                     }
 
-                    // Add new data
                     for (const col of collections) {
                         if (data[col]) {
                             data[col].forEach(item => {
                                 let newItem = { ...item };
                                 if (item.date) newItem.date = Timestamp.fromDate(new Date(item.date));
                                 if (item.createdAt) newItem.createdAt = Timestamp.fromDate(new Date(item.createdAt));
+                                if (item.startDate) newItem.startDate = Timestamp.fromDate(new Date(item.startDate));
+                                if (item.endDate) newItem.endDate = Timestamp.fromDate(new Date(item.endDate));
 
                                 const docRef = col === 'currencies' ? doc(db, `users/${user.uid}/${col}`, item.symbol) : doc(collection(db, `users/${user.uid}/${col}`));
                                 batch.set(docRef, newItem);
@@ -1382,7 +1401,7 @@ function DataIOView({ user, accounts, cards, transactions, schedules, currencies
             }
         };
         reader.readAsText(file);
-        e.target.value = null; // Reset file input
+        e.target.value = null;
     };
 
     return (
