@@ -203,7 +203,14 @@ export default function HouseholdApp() {
         });
     }, [accounts, transactions, rates, convertToKRW, accountsById]);
 
-    const { totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, assetsByCurrency } = React.useMemo(() => {
+    const { 
+        totalAssetInKRW, 
+        totalCashAssetInKRW, 
+        upcomingPayments, 
+        assetsByCurrency,
+        totalUpcomingIncome,
+        totalUpcomingExpense
+    } = React.useMemo(() => {
         const totalCash = accountsWithCalculatedBalances.reduce((sum, acc) => sum + acc.totalKRW, 0);
 
         const currencySummary = accountsWithCalculatedBalances.reduce((summary, account) => {
@@ -225,16 +232,26 @@ export default function HouseholdApp() {
 
             return { id: `card-${card.id}`, cardId: card.id, description: `${card.name} 결제 예정`, amount, date: new Date(today.getFullYear(), today.getMonth() + (today.getDate() < paymentDay ? 0 : 1), paymentDay), isCardPayment: true };
         });
+        
+        const upcomingSchedules = schedules.filter(s => !s.isCompleted);
+        const upcomingIncomeItems = upcomingSchedules.filter(s => s.type === 'income');
+        const upcomingExpenseItems = upcomingSchedules.filter(s => s.type === 'expense');
 
+        const totalUpcomingIncomeAmount = upcomingIncomeItems.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
+        const totalUpcomingExpenseAmount = upcomingExpenseItems.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
         const totalUpcomingPaymentAmount = cardPayments.reduce((sum, p) => sum + p.amount, 0);
+        
+        const totalAsset = totalCash + totalUpcomingIncomeAmount - totalUpcomingExpenseAmount - totalUpcomingPaymentAmount;
 
         return {
             totalCashAssetInKRW: totalCash,
-            totalAssetInKRW: totalCash - totalUpcomingPaymentAmount,
+            totalAssetInKRW: totalAsset,
             upcomingPayments: cardPayments.filter(p => p.amount > 0),
             assetsByCurrency: currencySummary,
+            totalUpcomingIncome: totalUpcomingIncomeAmount,
+            totalUpcomingExpense: totalUpcomingExpenseAmount
         };
-    }, [accountsWithCalculatedBalances, cards, transactions]);
+    }, [accountsWithCalculatedBalances, cards, transactions, schedules, convertToKRW, accountsById]);
 
     // --- 로그인 및 로그아웃 핸들러 ---
     const handleGoogleSignIn = async () => {
@@ -306,7 +323,7 @@ export default function HouseholdApp() {
             showAlert, showConfirm, db
         };
         switch (activeView) {
-            case 'dashboard': return <DashboardView {...props} totalAssetInKRW={totalAssetInKRW} totalCashAssetInKRW={totalCashAssetInKRW} upcomingPayments={upcomingPayments} />;
+            case 'dashboard': return <DashboardView {...props} totalAssetInKRW={totalAssetInKRW} totalCashAssetInKRW={totalCashAssetInKRW} upcomingPayments={upcomingPayments} totalUpcomingIncome={totalUpcomingIncome} totalUpcomingExpense={totalUpcomingExpense} />;
             case 'transactions': return <TransactionsView {...props} filter={transactionFilter} setFilter={setTransactionFilter} />;
             case 'management': return <ManagementView {...props} totalCashAssetInKRW={totalCashAssetInKRW} assetsByCurrency={assetsByCurrency} />;
             case 'schedule': return <ScheduleView {...props} upcomingPayments={upcomingPayments} />;
@@ -384,14 +401,11 @@ export default function HouseholdApp() {
 
 // --- 뷰 컴포넌트들 ---
 
-function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, transactions, accountsById, cardsById, schedules, convertToKRW }) {
+function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments, transactions, accountsById, cardsById, schedules, convertToKRW, totalUpcomingIncome, totalUpcomingExpense }) {
     const recentTransactions = transactions.slice(0, 5);
     const upcomingSchedules = React.useMemo(() => schedules.filter(s => !s.isCompleted).sort((a, b) => a.date.toDate().getTime() - b.date.toDate().getTime()), [schedules]);
     const upcomingIncome = upcomingSchedules.filter(s => s.type === 'income');
     const upcomingExpense = upcomingSchedules.filter(s => s.type === 'expense');
-
-    const totalUpcomingIncome = upcomingIncome.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
-    const totalUpcomingExpense = upcomingExpense.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
 
     return (
         <div>
@@ -409,6 +423,8 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
                     <ul>
                         {recentTransactions.map(t => {
                             const account = accountsById[t.accountId] || {};
+                            const card = t.type === 'card-expense' ? cardsById[t.cardId] : null;
+                            const paymentDate = card ? new Date(t.date.toDate().getFullYear(), t.date.toDate().getMonth() + 1, card.paymentDay) : null;
                             const currency = t.originalCurrency || account.currency || (t.type === 'card-expense' ? 'KRW' : '');
                             const displayAmount = t.originalAmount != null ? t.originalAmount : t.amount;
                             return (
@@ -416,8 +432,8 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
                                     <div>
                                         <span className="font-semibold">{t.description}</span>
                                         <p className="text-sm text-gray-500">
-                                            {t.type === 'card-expense' ? cardsById[t.cardId]?.name : account.name}
-                                            {t.type === 'transfer' && ` -> ${accountsById[t.toAccountId]?.name}`}
+                                            {t.type === 'card-expense' ? `${card?.name} 카드` : account.name}
+                                            {paymentDate && ` (결제예정: ${paymentDate.toLocaleDateString()})`}
                                         </p>
                                     </div>
                                     <span className={`font-bold ${t.type === 'income' ? 'text-blue-500' : 'text-red-500'}`}>
@@ -433,11 +449,14 @@ function DashboardView({ totalAssetInKRW, totalCashAssetInKRW, upcomingPayments,
                     <h3 className="text-xl font-semibold mb-4">다가오는 일정</h3>
                     <h4 className="font-semibold text-blue-600 mt-4 mb-2">예정 수입</h4>
                     {upcomingIncome.length > 0 ? (
-                        <ul> {upcomingIncome.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)} </ul>
+                        <ul> {upcomingIncome.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.date.toDate().toLocaleDateString()} - {s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)} </ul>
                     ) : <p className="text-sm text-gray-500">예정된 수입이 없습니다.</p>}
                     <h4 className="font-semibold text-red-600 mt-4 mb-2">예정 지출</h4>
-                    {upcomingExpense.length > 0 ? (
-                        <ul> {upcomingExpense.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)} </ul>
+                    {upcomingExpense.length > 0 || upcomingPayments.length > 0 ? (
+                        <ul> 
+                            {upcomingExpense.slice(0, 3).map(s => <li key={s.id} className="text-sm flex justify-between"><span>{s.date.toDate().toLocaleDateString()} - {s.description}</span><span>{formatNumber(s.amount)} {accountsById[s.accountId]?.currency}</span></li>)}
+                            {upcomingPayments.slice(0, 3).map(p => <li key={p.id} className="text-sm flex justify-between"><span>{p.date.toLocaleDateString()} - {p.description}</span><span>{formatCurrency(p.amount)}</span></li>)}
+                        </ul>
                     ) : <p className="text-sm text-gray-500">예정된 지출이 없습니다.</p>}
                 </div>
             </div>
@@ -1183,6 +1202,28 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
         }
     };
 
+    const handleSaveAsTemplate = async () => {
+        const dataForTemplate = {
+            description: formData.description,
+            amount: Number(formData.inputAmount),
+            category: formData.category || '',
+            type,
+            accountId: type === 'transfer' ? formData.fromAccountId : (type === 'card-expense' ? null : formData.accountId),
+            toAccountId: type === 'transfer' ? formData.toAccountId : null,
+            cardId: type === 'card-expense' ? formData.cardId : null,
+        };
+        if (!dataForTemplate.description || !dataForTemplate.amount) {
+            showAlert("템플릿으로 저장하려면 내용과 금액을 입력해야 합니다.");
+            return;
+        }
+        try {
+            await addDoc(collection(db, `users/${user.uid}/templates`), dataForTemplate);
+            showAlert("템플릿으로 저장되었습니다.");
+        } catch (error) {
+            showAlert(`템플릿 저장 실패: ${error.message}`);
+        }
+    };
+
     return (
         <div className="bg-white p-6 rounded-xl shadow-lg max-w-lg mx-auto w-full">
             <h2 className="text-2xl font-bold mb-4">{isEditing && !isTemplate ? '거래 수정' : '거래 추가'}</h2>
@@ -1248,6 +1289,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
                 </div>
                 <div className="flex justify-end space-x-2 pt-4">
                     <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
+                    <button type="button" onClick={handleSaveAsTemplate} className="bg-green-500 text-white px-4 py-2 rounded-lg">템플릿으로 저장</button>
                     <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg">저장</button>
                 </div>
             </form>
@@ -1425,22 +1467,21 @@ function BudgetForm({ user, budgetToEdit, onFinish, db, categories, showAlert })
 }
 
 function TemplatesView({ user, templates, onAddTransaction, showAlert, showConfirm, db }) {
-    const [editingTemplate, setEditingTemplate] = React.useState(null);
-
     const handleDeleteTemplate = async (id) => {
         showConfirm("이 템플릿을 삭제하시겠습니까?", async () => {
             await deleteDoc(doc(db, `users/${user.uid}/templates`, id));
             showAlert("템플릿이 삭제되었습니다.");
         });
     };
-    
-    // ... (TemplateForm logic will be inside TransactionForm or a new component)
 
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold">자주 쓰는 거래</h2>
-                 {/* A button to open a form for a new template could be added here */}
+            </div>
+            <div className="mb-6 bg-white p-6 rounded-xl shadow-md">
+                 <h3 className="text-xl font-semibold mb-4">새 템플릿 추가 안내</h3>
+                 <p className="text-gray-600">새 템플릿은 '거래내역' 탭의 '거래 추가' 화면에서 내용을 입력한 후, 하단의 '템플릿으로 저장' 버튼을 눌러 추가할 수 있습니다.</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {templates.map(template => (
@@ -1456,10 +1497,7 @@ function TemplatesView({ user, templates, onAddTransaction, showAlert, showConfi
                         </div>
                     </div>
                 ))}
-            </div>
-            <div className="mt-6 bg-white p-6 rounded-xl shadow-md">
-                 <h3 className="text-xl font-semibold mb-4">새 템플릿 추가</h3>
-                 <p className="text-gray-600 mb-4">거래내역 추가 화면에서 내용을 입력한 후, 저장 대신 '템플릿으로 저장' 버튼을 눌러 추가할 수 있습니다. (구현 예정)</p>
+                {templates.length === 0 && <p className="text-center text-gray-500 col-span-full">저장된 템플릿이 없습니다.</p>}
             </div>
         </div>
     );
@@ -1493,6 +1531,30 @@ function ReportsView({ transactions, convertToKRW, accountsById }) {
             }
         });
         return Object.entries(months).map(([name, value]) => ({ name, ...value })).sort((a,b) => a.name.localeCompare(b.name)).slice(-6); // 마지막 6개월
+    }, [transactions, convertToKRW]);
+
+    const dailyTrendData = React.useMemo(() => {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+        const daily = {};
+    
+        transactions
+            .filter(t => t.date.toDate() >= thirtyDaysAgo)
+            .forEach(t => {
+                const dateStr = t.date.toDate().toISOString().slice(0, 10);
+                if (!daily[dateStr]) {
+                    daily[dateStr] = { date: dateStr, income: 0, expense: 0 };
+                }
+                const amountKRW = convertToKRW(t.originalAmount, t.originalCurrency);
+                if (t.type === 'income') {
+                    daily[dateStr].income += amountKRW;
+                } else if (t.type === 'expense' || t.type === 'card-expense') {
+                    daily[dateStr].expense += amountKRW;
+                }
+            });
+        
+        return Object.values(daily).sort((a,b) => a.date.localeCompare(b.date));
     }, [transactions, convertToKRW]);
 
     return (
@@ -1529,6 +1591,22 @@ function ReportsView({ transactions, convertToKRW, accountsById }) {
                         </ResponsiveContainer>
                     ) : <p className="text-gray-500">분석할 내역이 없습니다.</p>}
                 </div>
+            </div>
+            <div className="bg-white p-6 rounded-xl shadow-md mt-6">
+                <h3 className="text-xl font-semibold mb-4">최근 30일 수입/지출 추이</h3>
+                {dailyTrendData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={400}>
+                        <LineChart data={dailyTrendData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" tickFormatter={(date) => date.substring(5)} />
+                            <YAxis tickFormatter={(value) => `${value/10000}만`} />
+                            <Tooltip formatter={(value) => formatCurrency(value)} />
+                            <Legend />
+                            <Line type="monotone" dataKey="income" stroke="#8884d8" name="수입" />
+                            <Line type="monotone" dataKey="expense" stroke="#82ca9d" name="지출" />
+                        </LineChart>
+                    </ResponsiveContainer>
+                ) : <p className="text-gray-500">분석할 내역이 없습니다.</p>}
             </div>
         </div>
     );
