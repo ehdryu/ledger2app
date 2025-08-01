@@ -303,7 +303,7 @@ export default function HouseholdApp() {
             onEditSchedule: handleOpenEditScheduleModal,
             onDeleteSchedule: handleDeleteSchedule,
             onAccountClick: handleAccountClick,
-            showAlert, showConfirm,
+            showAlert, showConfirm, db
         };
         switch (activeView) {
             case 'dashboard': return <DashboardView {...props} totalAssetInKRW={totalAssetInKRW} totalCashAssetInKRW={totalCashAssetInKRW} upcomingPayments={upcomingPayments} />;
@@ -985,8 +985,8 @@ function CurrencyView({ user, currencies, showAlert, showConfirm }) {
 
 function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSchedule, onDeleteSchedule, upcomingPayments }) {
     const allSchedules = React.useMemo(() => {
-        const combined = [...schedules, ...upcomingPayments];
-        return combined.sort((a,b) => a.date.toDate ? a.date.toDate().getTime() : a.date.getTime() - b.date.toDate ? b.date.toDate().getTime() : b.date.getTime());
+        const combined = [...schedules.map(s => ({...s, date: s.date.toDate()})), ...upcomingPayments];
+        return combined.sort((a,b) => a.date.getTime() - b.date.getTime());
     }, [schedules, upcomingPayments]);
 
     return (
@@ -1000,7 +1000,7 @@ function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSche
                 <ul className="divide-y divide-gray-200">
                     {allSchedules.map(s => {
                         const account = accountsById[s.accountId] || {};
-                        const date = s.date.toDate ? s.date.toDate() : s.date;
+                        const date = s.date;
                         const type = s.isCardPayment ? 'expense' : s.type;
                         return (
                             <li key={s.id} className="py-3 flex justify-between items-center">
@@ -1104,7 +1104,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
     const [type, setType] = React.useState(isEditing || isTemplate ? transactionToEdit.type : 'expense');
     const [formData, setFormData] = React.useState({
-        date: isEditing ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
+        date: isEditing && transactionToEdit.date ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
         description: isEditing || isTemplate ? transactionToEdit.description : '',
         inputAmount: isEditing || isTemplate ? transactionToEdit.amount : '',
         category: isEditing || isTemplate ? transactionToEdit.category || '' : '',
@@ -1255,18 +1255,214 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
     );
 }
 
-// ... (CategoryView, DataIOView remain the same)
-
 // --- NEW/ENHANCED VIEWS ---
 
-function BudgetView({ user, budgets, transactions, categories, showAlert, showConfirm, db }) {
-    // ... Implementation for BudgetView
-    return <div className="text-center p-8 bg-white rounded-lg shadow">구현 예정인 기능입니다.</div>
+function BudgetView({ user, budgets, transactions, categories, showAlert, showConfirm, db, convertToKRW }) {
+    const [editingBudget, setEditingBudget] = React.useState(null);
+
+    const handleDeleteBudget = async (id) => {
+        showConfirm("이 예산을 삭제하시겠습니까?", async () => {
+            await deleteDoc(doc(db, `users/${user.uid}/budgets`, id));
+            showAlert("예산이 삭제되었습니다.");
+        });
+    };
+
+    return (
+        <div>
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold">예산 관리</h2>
+                <button onClick={() => setEditingBudget({})} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">새 예산 설정</button>
+            </div>
+
+            {editingBudget ? (
+                <BudgetForm user={user} budgetToEdit={editingBudget} onFinish={() => setEditingBudget(null)} db={db} categories={categories} showAlert={showAlert} />
+            ) : (
+                <div className="space-y-6">
+                    {budgets.map(budget => (
+                        <BudgetDetails key={budget.id} budget={budget} transactions={transactions} convertToKRW={convertToKRW} onEdit={() => setEditingBudget(budget)} onDelete={() => handleDeleteBudget(budget.id)} />
+                    ))}
+                    {budgets.length === 0 && <p className="text-center text-gray-500">설정된 예산이 없습니다. 새 예산을 추가해보세요.</p>}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function BudgetDetails({ budget, transactions, convertToKRW, onEdit, onDelete }) {
+    const { spent, spentByCategory } = React.useMemo(() => {
+        const budgetStart = budget.startDate.toDate();
+        const budgetEnd = budget.endDate.toDate();
+        let totalSpent = 0;
+        const categorySpent = {};
+
+        transactions
+            .filter(t => {
+                const tDate = t.date.toDate();
+                return tDate >= budgetStart && tDate <= budgetEnd && (t.type === 'expense' || t.type === 'card-expense') && !t.excludeFromBudget;
+            })
+            .forEach(t => {
+                const amountKRW = convertToKRW(t.originalAmount, t.originalCurrency);
+                totalSpent += amountKRW;
+                if (t.category) {
+                    categorySpent[t.category] = (categorySpent[t.category] || 0) + amountKRW;
+                }
+            });
+        return { spent: totalSpent, spentByCategory: categorySpent };
+    }, [budget, transactions, convertToKRW]);
+
+    const totalBudgetAmount = budget.totalAmount || 0;
+    const totalProgress = totalBudgetAmount > 0 ? (spent / totalBudgetAmount) * 100 : 0;
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-md">
+            <div className="flex justify-between items-start">
+                <div>
+                    <h3 className="text-xl font-semibold">{budget.startDate.toDate().toLocaleDateString()} ~ {budget.endDate.toDate().toLocaleDateString()}</h3>
+                    <p className="text-2xl font-bold mt-2">{formatCurrency(totalBudgetAmount)}</p>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={onEdit} className="p-2 hover:bg-gray-200 rounded-full text-sm">✏️</button>
+                    <button onClick={onDelete} className="p-2 hover:bg-gray-200 rounded-full text-sm">🗑️</button>
+                </div>
+            </div>
+            <div className="mt-4">
+                <div className="flex justify-between text-sm font-medium">
+                    <span>총 사용 금액: {formatCurrency(spent)}</span>
+                    <span>{totalProgress.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-4 mt-1">
+                    <div className="bg-indigo-600 h-4 rounded-full" style={{ width: `${Math.min(totalProgress, 100)}%` }}></div>
+                </div>
+            </div>
+            <div className="mt-4 space-y-2">
+                {Object.entries(budget.categoryBudgets || {}).map(([category, amount]) => {
+                    const categorySpent = spentByCategory[category] || 0;
+                    const categoryProgress = amount > 0 ? (categorySpent / amount) * 100 : 0;
+                    return (
+                        <div key={category}>
+                            <div className="flex justify-between text-sm">
+                                <span>{category}</span>
+                                <span>{formatCurrency(categorySpent)} / {formatCurrency(amount)}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
+                                <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${Math.min(categoryProgress, 100)}%` }}></div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+function BudgetForm({ user, budgetToEdit, onFinish, db, categories, showAlert }) {
+    const isEditing = !!budgetToEdit.id;
+    const [formData, setFormData] = React.useState({
+        startDate: budgetToEdit.startDate ? new Date(budgetToEdit.startDate.toDate()).toISOString().slice(0, 10) : '',
+        endDate: budgetToEdit.endDate ? new Date(budgetToEdit.endDate.toDate()).toISOString().slice(0, 10) : '',
+        totalAmount: budgetToEdit.totalAmount || '',
+        categoryBudgets: budgetToEdit.categoryBudgets || {},
+    });
+
+    const handleCategoryBudgetChange = (category, value) => {
+        setFormData(prev => ({
+            ...prev,
+            categoryBudgets: {
+                ...prev.categoryBudgets,
+                [category]: Number(value)
+            }
+        }));
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const dataToSave = {
+            ...formData,
+            totalAmount: Number(formData.totalAmount),
+            startDate: Timestamp.fromDate(new Date(formData.startDate)),
+            endDate: Timestamp.fromDate(new Date(formData.endDate)),
+        };
+
+        try {
+            if (isEditing) {
+                await setDoc(doc(db, `users/${user.uid}/budgets`, budgetToEdit.id), dataToSave, { merge: true });
+                showAlert("예산이 수정되었습니다.");
+            } else {
+                await addDoc(collection(db, `users/${user.uid}/budgets`), dataToSave);
+                showAlert("새 예산이 추가되었습니다.");
+            }
+            onFinish();
+        } catch (error) {
+            showAlert(`저장 실패: ${error.message}`);
+        }
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-2xl mx-auto">
+            <h2 className="text-2xl font-bold mb-4">{isEditing ? '예산 수정' : '새 예산 설정'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-2 border rounded" required />
+                    <input type="date" value={formData.endDate} onChange={e => setFormData({...formData, endDate: e.target.value})} className="w-full p-2 border rounded" required />
+                </div>
+                <input type="number" value={formData.totalAmount} onChange={e => setFormData({...formData, totalAmount: e.target.value})} placeholder="총 예산 금액" className="w-full p-2 border rounded" required />
+                <h3 className="font-semibold pt-4">카테고리별 예산</h3>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {categories.map(cat => (
+                        <div key={cat.id} className="flex items-center gap-4">
+                            <label className="w-1/3">{cat.name}</label>
+                            <input type="number" value={formData.categoryBudgets[cat.name] || ''} onChange={e => handleCategoryBudgetChange(cat.name, e.target.value)} placeholder="금액" className="w-2/3 p-2 border rounded" />
+                        </div>
+                    ))}
+                </div>
+                <div className="flex justify-end space-x-2 pt-4">
+                    <button type="button" onClick={onFinish} className="bg-gray-200 px-4 py-2 rounded-lg">취소</button>
+                    <button type="submit" className="bg-indigo-500 text-white px-4 py-2 rounded-lg">저장</button>
+                </div>
+            </form>
+        </div>
+    );
 }
 
 function TemplatesView({ user, templates, onAddTransaction, showAlert, showConfirm, db }) {
-    // ... Implementation for TemplatesView
-    return <div className="text-center p-8 bg-white rounded-lg shadow">구현 예정인 기능입니다.</div>
+    const [editingTemplate, setEditingTemplate] = React.useState(null);
+
+    const handleDeleteTemplate = async (id) => {
+        showConfirm("이 템플릿을 삭제하시겠습니까?", async () => {
+            await deleteDoc(doc(db, `users/${user.uid}/templates`, id));
+            showAlert("템플릿이 삭제되었습니다.");
+        });
+    };
+    
+    // ... (TemplateForm logic will be inside TransactionForm or a new component)
+
+    return (
+        <div>
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold">자주 쓰는 거래</h2>
+                 {/* A button to open a form for a new template could be added here */}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {templates.map(template => (
+                    <div key={template.id} className="bg-white p-4 rounded-xl shadow-md flex flex-col">
+                        <div className="flex-grow">
+                            <p className="font-bold text-lg">{template.description}</p>
+                            <p className="text-sm text-gray-600">{template.category}</p>
+                            <p className="text-xl font-semibold mt-2">{formatCurrency(template.amount)}</p>
+                        </div>
+                        <div className="flex gap-2 mt-4">
+                            <button onClick={() => onAddTransaction(template)} className="w-full bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 text-sm">사용하기</button>
+                            <button onClick={() => handleDeleteTemplate(template.id)} className="p-2 hover:bg-gray-200 rounded-lg">🗑️</button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <div className="mt-6 bg-white p-6 rounded-xl shadow-md">
+                 <h3 className="text-xl font-semibold mb-4">새 템플릿 추가</h3>
+                 <p className="text-gray-600 mb-4">거래내역 추가 화면에서 내용을 입력한 후, 저장 대신 '템플릿으로 저장' 버튼을 눌러 추가할 수 있습니다. (구현 예정)</p>
+            </div>
+        </div>
+    );
 }
 
 function ReportsView({ transactions, convertToKRW, accountsById }) {
@@ -1472,4 +1668,3 @@ function CategoryView({ user, categories, db, showAlert, showConfirm }) {
         </div>
     );
 }
-
