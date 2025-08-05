@@ -42,6 +42,22 @@ const formatCurrency = (amount, currency = 'KRW') => {
 
 const formatNumber = (amount) => new Intl.NumberFormat('ko-KR').format(amount);
 
+// 한국 시간(KST)을 YYYY-MM-DDTHH:mm 형식으로 반환하는 함수
+const getKSTDateString = () => {
+    const now = new Date();
+    const kstOffset = 9 * 60 * 60 * 1000;
+    const kstDate = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + kstOffset);
+    
+    const year = kstDate.getFullYear();
+    const month = String(kstDate.getMonth() + 1).padStart(2, '0');
+    const day = String(kstDate.getDate()).padStart(2, '0');
+    const hours = String(kstDate.getHours()).padStart(2, '0');
+    const minutes = String(kstDate.getMinutes()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
+
 // --- UI 컴포넌트 ---
 function CustomModal({ message, onConfirm, onCancel }) {
     return (
@@ -104,7 +120,7 @@ export default function HouseholdApp() {
     const [showTransactionModal, setShowTransactionModal] = React.useState(false);
     const [showScheduleModal, setShowScheduleModal] = React.useState(false);
     const [isNavOpen, setIsNavOpen] = React.useState(false);
-    const [transactionFilter, setTransactionFilter] = React.useState({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '' });
+    const [transactionFilter, setTransactionFilter] = React.useState({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '', startDate: null, endDate: null });
 
     const [accounts, setAccounts] = React.useState([]);
     const [cards, setCards] = React.useState([]);
@@ -241,7 +257,7 @@ export default function HouseholdApp() {
         const totalUpcomingExpenseAmount = upcomingExpenseItems.reduce((sum, s) => sum + convertToKRW(s.amount, accountsById[s.accountId]?.currency), 0);
         const totalUpcomingPaymentAmount = cardPayments.reduce((sum, p) => sum + p.amount, 0);
         
-        const totalAsset = totalCash + totalUpcomingIncomeAmount - totalUpcomingExpenseAmount - totalUpcomingPaymentAmount;
+        const totalAsset = totalCash + totalUpcomingIncomeAmount - (totalUpcomingExpenseAmount + totalUpcomingPaymentAmount);
 
         return {
             totalCashAssetInKRW: totalCash,
@@ -280,7 +296,14 @@ export default function HouseholdApp() {
     const handleOpenAddScheduleModal = () => { setEditingSchedule(null); setShowScheduleModal(true); };
     const handleOpenEditScheduleModal = (schedule) => { setEditingSchedule(schedule); setShowScheduleModal(true); };
     const handleAccountClick = (accountId) => {
-        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '' }));
+        setTransactionFilter(prev => ({ ...prev, account: accountId, type: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '', startDate: null, endDate: null }));
+        setActiveView('transactions');
+    };
+    const handleViewBudgetTransactions = (startDate, endDate) => {
+        setTransactionFilter({
+            type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '',
+            startDate, endDate
+        });
         setActiveView('transactions');
     };
 
@@ -320,6 +343,7 @@ export default function HouseholdApp() {
             onEditSchedule: handleOpenEditScheduleModal,
             onDeleteSchedule: handleDeleteSchedule,
             onAccountClick: handleAccountClick,
+            onViewBudgetTransactions: handleViewBudgetTransactions,
             showAlert, showConfirm, db
         };
         switch (activeView) {
@@ -474,6 +498,14 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
     const filteredTransactions = React.useMemo(() => {
         return transactions.filter(t => {
             const date = t.date.toDate();
+            // 예산 기간 필터
+            if (filter.startDate && filter.endDate) {
+                const startDate = filter.startDate.toDate();
+                const endDate = filter.endDate.toDate();
+                return date >= startDate && date <= endDate && !t.excludeFromBudget;
+            }
+
+            // 일반 필터
             const typeMatch = filter.type === 'all' || t.type === filter.type;
             const accountMatch = filter.account === 'all' || t.accountId === filter.account || t.cardId === filter.account || (t.type === 'transfer' && t.toAccountId === filter.account);
             let dateMatch = filter.year === 'all' ? true : date.getFullYear() === Number(filter.year) && (filter.month === 'all' ? true : (date.getMonth() + 1) === Number(filter.month));
@@ -485,35 +517,50 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
         });
     }, [transactions, filter]);
 
+    const resetFilter = () => {
+        setFilter({ type: 'all', account: 'all', year: 'all', month: 'all', category: 'all', search: '', tag: '', startDate: null, endDate: null });
+    }
+
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold">전체 거래 내역</h2>
                 <button onClick={() => onAddTransaction()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">거래 추가</button>
             </div>
-            <div className="flex flex-wrap gap-4 mb-4 bg-white p-4 rounded-xl shadow-sm">
-                <input type="text" placeholder="내용/메모 검색..." value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })} className="p-2 border rounded-lg bg-white flex-grow"/>
-                <input type="text" placeholder="태그 검색..." value={filter.tag} onChange={e => setFilter({...filter, tag: e.target.value})} className="p-2 border rounded-lg bg-white"/>
-                <select value={filter.type} onChange={e => setFilter({ ...filter, type: e.target.value })} className="p-2 border rounded-lg bg-white">
-                    <option value="all">모든 종류</option><option value="income">수입</option><option value="expense">지출(계좌)</option><option value="card-expense">지출(카드)</option><option value="payment">카드대금</option><option value="transfer">이체</option>
-                </select>
-                <select value={filter.account} onChange={e => setFilter({ ...filter, account: e.target.value })} className="p-2 border rounded-lg bg-white">
-                    <option value="all">모든 계좌/카드</option>
-                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                    {cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}
-                </select>
-                <select value={filter.category} onChange={e => setFilter({ ...filter, category: e.target.value })} className="p-2 border rounded-lg bg-white">
-                    <option value="all">모든 카테고리</option>
-                    {categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
-                </select>
-                <select value={filter.year} onChange={e => setFilter({ ...filter, year: e.target.value, month: 'all' })} className="p-2 border rounded-lg bg-white">
-                    {transactionYears.map(y => <option key={y} value={y}>{y === 'all' ? '전체 연도' : `${y}년`}</option>)}
-                </select>
-                <select value={filter.month} onChange={e => setFilter({ ...filter, month: e.target.value })} className="p-2 border rounded-lg bg-white" disabled={filter.year === 'all'}>
-                    <option value="all">전체 월</option>
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
-                </select>
-            </div>
+
+            {filter.startDate ? (
+                <div className="mb-4 bg-yellow-100 p-4 rounded-lg flex justify-between items-center">
+                    <p>
+                        <strong>예산 상세 조회:</strong> {filter.startDate.toDate().toLocaleDateString()} ~ {filter.endDate.toDate().toLocaleDateString()} 기간의 내역입니다.
+                    </p>
+                    <button onClick={resetFilter} className="bg-gray-500 text-white px-3 py-1 rounded-lg">전체 내역 보기</button>
+                </div>
+            ) : (
+                <div className="flex flex-wrap gap-4 mb-4 bg-white p-4 rounded-xl shadow-sm">
+                    <input type="text" placeholder="내용/메모 검색..." value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })} className="p-2 border rounded-lg bg-white flex-grow"/>
+                    <input type="text" placeholder="태그 검색..." value={filter.tag} onChange={e => setFilter({...filter, tag: e.target.value})} className="p-2 border rounded-lg bg-white"/>
+                    <select value={filter.type} onChange={e => setFilter({ ...filter, type: e.target.value })} className="p-2 border rounded-lg bg-white">
+                        <option value="all">모든 종류</option><option value="income">수입</option><option value="expense">지출(계좌)</option><option value="card-expense">지출(카드)</option><option value="payment">카드대금</option><option value="transfer">이체</option>
+                    </select>
+                    <select value={filter.account} onChange={e => setFilter({ ...filter, account: e.target.value })} className="p-2 border rounded-lg bg-white">
+                        <option value="all">모든 계좌/카드</option>
+                        {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                        {cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}
+                    </select>
+                    <select value={filter.category} onChange={e => setFilter({ ...filter, category: e.target.value })} className="p-2 border rounded-lg bg-white">
+                        <option value="all">모든 카테고리</option>
+                        {categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
+                    </select>
+                    <select value={filter.year} onChange={e => setFilter({ ...filter, year: e.target.value, month: 'all' })} className="p-2 border rounded-lg bg-white">
+                        {transactionYears.map(y => <option key={y} value={y}>{y === 'all' ? '전체 연도' : `${y}년`}</option>)}
+                    </select>
+                    <select value={filter.month} onChange={e => setFilter({ ...filter, month: e.target.value })} className="p-2 border rounded-lg bg-white" disabled={filter.year === 'all'}>
+                        <option value="all">전체 월</option>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+                    </select>
+                </div>
+            )}
+            
             <div className="bg-white p-6 rounded-xl shadow-md">
                 <ul className="divide-y divide-gray-200">
                     {filteredTransactions.map(t => {
@@ -1123,7 +1170,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
     const [type, setType] = React.useState(isEditing || isTemplate ? transactionToEdit.type : 'expense');
     const [formData, setFormData] = React.useState({
-        date: isEditing && transactionToEdit.date ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
+        date: isEditing && transactionToEdit.date ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : getKSTDateString(),
         description: isEditing || isTemplate ? transactionToEdit.description : '',
         inputAmount: isEditing || isTemplate ? transactionToEdit.amount : '',
         category: isEditing || isTemplate ? transactionToEdit.category || '' : '',
@@ -1299,7 +1346,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
 // --- NEW/ENHANCED VIEWS ---
 
-function BudgetView({ user, budgets, transactions, categories, showAlert, showConfirm, db, convertToKRW }) {
+function BudgetView({ user, budgets, transactions, categories, showAlert, showConfirm, db, convertToKRW, onViewBudgetTransactions }) {
     const [editingBudget, setEditingBudget] = React.useState(null);
 
     const handleDeleteBudget = async (id) => {
@@ -1321,7 +1368,7 @@ function BudgetView({ user, budgets, transactions, categories, showAlert, showCo
             ) : (
                 <div className="space-y-6">
                     {budgets.map(budget => (
-                        <BudgetDetails key={budget.id} budget={budget} transactions={transactions} convertToKRW={convertToKRW} onEdit={() => setEditingBudget(budget)} onDelete={() => handleDeleteBudget(budget.id)} />
+                        <BudgetDetails key={budget.id} budget={budget} transactions={transactions} convertToKRW={convertToKRW} onEdit={() => setEditingBudget(budget)} onDelete={() => handleDeleteBudget(budget.id)} onViewDetails={() => onViewBudgetTransactions(budget.startDate, budget.endDate)} />
                     ))}
                     {budgets.length === 0 && <p className="text-center text-gray-500">설정된 예산이 없습니다. 새 예산을 추가해보세요.</p>}
                 </div>
@@ -1330,7 +1377,7 @@ function BudgetView({ user, budgets, transactions, categories, showAlert, showCo
     );
 }
 
-function BudgetDetails({ budget, transactions, convertToKRW, onEdit, onDelete }) {
+function BudgetDetails({ budget, transactions, convertToKRW, onEdit, onDelete, onViewDetails }) {
     const { spent, spentByCategory } = React.useMemo(() => {
         const budgetStart = budget.startDate.toDate();
         const budgetEnd = budget.endDate.toDate();
@@ -1363,6 +1410,7 @@ function BudgetDetails({ budget, transactions, convertToKRW, onEdit, onDelete })
                     <p className="text-2xl font-bold mt-2">{formatCurrency(totalBudgetAmount)}</p>
                 </div>
                 <div className="flex gap-2">
+                    <button onClick={onViewDetails} className="p-2 hover:bg-gray-200 rounded-full text-sm">🔍</button>
                     <button onClick={onEdit} className="p-2 hover:bg-gray-200 rounded-full text-sm">✏️</button>
                     <button onClick={onDelete} className="p-2 hover:bg-gray-200 rounded-full text-sm">🗑️</button>
                 </div>
