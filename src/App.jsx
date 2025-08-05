@@ -43,10 +43,9 @@ const formatCurrency = (amount, currency = 'KRW') => {
 const formatNumber = (amount) => new Intl.NumberFormat('ko-KR').format(amount);
 
 // 한국 시간(KST)을 YYYY-MM-DDTHH:mm 형식으로 반환하는 함수
-const getKSTDateString = () => {
-    const now = new Date();
+const getKSTDateString = (date = new Date()) => {
     const kstOffset = 9 * 60 * 60 * 1000;
-    const kstDate = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + kstOffset);
+    const kstDate = new Date(date.getTime() + date.getTimezoneOffset() * 60000 + kstOffset);
     
     const year = kstDate.getFullYear();
     const month = String(kstDate.getMonth() + 1).padStart(2, '0');
@@ -317,6 +316,7 @@ export default function HouseholdApp() {
                 console.error("거래 삭제 실패:", error);
                 showAlert(`삭제 실패: ${error.message}`);
             }
+            setModal({ isOpen: false });
         });
     };
 
@@ -329,6 +329,41 @@ export default function HouseholdApp() {
                 console.error("스케줄 삭제 실패:", error);
                 showAlert(`삭제 실패: ${error.message}`);
             }
+            setModal({ isOpen: false });
+        });
+    };
+
+    const handleConfirmSchedule = async (schedule) => {
+        showConfirm(`'${schedule.description}' 항목을 거래 내역에 추가하시겠습니까?`, async () => {
+            try {
+                const account = accountsById[schedule.accountId];
+                const newTransaction = {
+                    description: schedule.description,
+                    amount: schedule.amount,
+                    originalAmount: schedule.amount,
+                    originalCurrency: account.currency || 'KRW',
+                    date: schedule.date, // Timestamp
+                    type: schedule.type,
+                    accountId: schedule.accountId,
+                    excludeFromBudget: false,
+                    memo: '스케줄에서 확정됨',
+                    tags: [],
+                };
+    
+                const batch = writeBatch(db);
+                const newTransRef = doc(collection(db, `users/${user.uid}/transactions`));
+                batch.set(newTransRef, newTransaction);
+    
+                const scheduleRef = doc(db, `users/${user.uid}/schedules`, schedule.id);
+                batch.update(scheduleRef, { isCompleted: true });
+    
+                await batch.commit();
+                showAlert("거래 내역에 추가되었습니다.");
+            } catch(error) {
+                console.error("스케줄 확정 실패:", error);
+                showAlert(`처리 실패: ${error.message}`);
+            }
+            setModal({ isOpen: false });
         });
     };
 
@@ -342,6 +377,7 @@ export default function HouseholdApp() {
             onAddSchedule: handleOpenAddScheduleModal,
             onEditSchedule: handleOpenEditScheduleModal,
             onDeleteSchedule: handleDeleteSchedule,
+            onConfirmSchedule: handleConfirmSchedule,
             onAccountClick: handleAccountClick,
             onViewBudgetTransactions: handleViewBudgetTransactions,
             showAlert, showConfirm, db
@@ -1049,9 +1085,9 @@ function CurrencyView({ user, currencies, showAlert, showConfirm }) {
     );
 }
 
-function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSchedule, onDeleteSchedule, upcomingPayments }) {
+function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSchedule, onDeleteSchedule, onConfirmSchedule, upcomingPayments }) {
     const allSchedules = React.useMemo(() => {
-        const combined = [...schedules.map(s => ({...s, date: s.date.toDate()})), ...upcomingPayments];
+        const combined = [...schedules.filter(s => !s.isCompleted).map(s => ({...s, date: s.date.toDate()})), ...upcomingPayments];
         return combined.sort((a,b) => a.date.getTime() - b.date.getTime());
     }, [schedules, upcomingPayments]);
 
@@ -1078,6 +1114,7 @@ function ScheduleView({ user, schedules, accountsById, onAddSchedule, onEditSche
                                     <span className={`font-bold ${type === 'income' ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrency(s.amount)}</span>
                                     {!s.isCardPayment && (
                                         <>
+                                            <button onClick={() => onConfirmSchedule(s)} className="p-2 hover:bg-gray-200 rounded-full">✅</button>
                                             <button onClick={() => onEditSchedule(s)} className="p-2 hover:bg-gray-200 rounded-full">✏️</button>
                                             <button onClick={() => onDeleteSchedule(s.id)} className="p-2 hover:bg-gray-200 rounded-full">🗑️</button>
                                         </>
@@ -1097,7 +1134,7 @@ function ScheduleForm({ user, accounts, onFinish, scheduleToEdit, db, showAlert 
     const [formData, setFormData] = React.useState({
         description: isEditing ? scheduleToEdit.description : '',
         amount: isEditing ? scheduleToEdit.amount : '',
-        date: isEditing ? new Date(scheduleToEdit.date.toDate()).toISOString().slice(0, 16) : '',
+        date: isEditing ? getKSTDateString(scheduleToEdit.date) : getKSTDateString(),
         accountId: isEditing ? scheduleToEdit.accountId : '',
         type: isEditing ? scheduleToEdit.type : 'income',
     });
@@ -1170,7 +1207,7 @@ function TransactionForm({ user, accounts, cards, onFinish, transactionToEdit, d
 
     const [type, setType] = React.useState(isEditing || isTemplate ? transactionToEdit.type : 'expense');
     const [formData, setFormData] = React.useState({
-        date: isEditing && transactionToEdit.date ? new Date(transactionToEdit.date.toDate()).toISOString().slice(0, 16) : getKSTDateString(),
+        date: isEditing && transactionToEdit.date ? getKSTDateString(transactionToEdit.date.toDate()) : getKSTDateString(),
         description: isEditing || isTemplate ? transactionToEdit.description : '',
         inputAmount: isEditing || isTemplate ? transactionToEdit.amount : '',
         category: isEditing || isTemplate ? transactionToEdit.category || '' : '',
