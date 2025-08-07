@@ -622,6 +622,7 @@ function TransactionsView({ transactions, accountsById, cardsById, accounts, car
                                                 {t.tags.map(tag => <span key={tag} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full">#{tag}</span>)}
                                             </div>
                                         )}
+                                        {t.memo && <p className="text-sm text-gray-500 mt-1 bg-gray-100 p-2 rounded-md">{t.memo}</p>}
                                     </div>
                                 </div>
                                 <div className="flex items-center space-x-2 sm:space-x-4 mt-2 sm:mt-0">
